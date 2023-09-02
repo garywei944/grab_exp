@@ -1,0 +1,40 @@
+#!/bin/bash
+#SBATCH -o logs/%x/%j.out               # output file (%j expands to jobID)
+#SBATCH -e logs/%x/%j.err               # error log file (%j expands to jobID)
+#SBATCH -N 1                                 # Total number of nodes requested
+#SBATCH -n 16                                 # Total number of cores requested
+#SBATCH --get-user-env                       # retrieve the users login environment
+#SBATCH --mem=64g                            # server memory requested (per node)
+#SBATCH -t 08:00:00                           # Time limit (hh:mm:ss)
+#SBATCH --partition=gpu,desa                     # Request partition
+#SBATCH --gres=gpu:1                  # Type/number of GPUs needed
+
+dataset=$1
+shift
+model=$1
+shift
+balance=$1
+shift
+seed=$1
+
+if [ -z "$1" ]; then
+  echo "Usage: $0 <dataset> <model_name> <balance> <seed> <args>"
+  exit 1
+fi
+
+shift
+
+CMD="python experiments/cv/cv.py \
+--dataset $dataset \
+--model_name $model \
+--balance_type $balance \
+--seed $seed \
+--num_train_epochs 100 \
+--output_dir checkpoints \
+--dataloader_num_workers 1 \
+--use_wandb \
+--disable_tqdm 1 \
+$*"
+
+echo "$CMD"
+eval "$CMD"

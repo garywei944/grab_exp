@@ -1,0 +1,43 @@
+#!/bin/bash
+#SBATCH -J lora_glue                           # Job name
+#SBATCH -o logs/lora_glue_%j.out               # output file (%j expands to jobID)
+#SBATCH -e logs/lora_glue_%j.err               # error log file (%j expands to jobID)
+#SBATCH -N 1                                 # Total number of nodes requested
+#SBATCH -n 1                                 # Total number of cores requested
+#SBATCH --get-user-env                       # retrieve the users login environment
+#SBATCH --mem=32g                            # server memory requested (per node)
+#SBATCH -t 2-00:00:00                           # Time limit (hh:mm:ss)
+#SBATCH --partition=gpu,desa                     # Request partition
+#SBATCH --gres=gpu:1                # Type/number of GPUs needed
+
+task_name=$1
+shift
+model=$1
+shift
+balance=$1
+shift
+seed=$1
+
+if [ -z "$1" ]; then
+  echo "Usage: $0 <task_name> <model> <balance> <seed> <args>"
+  exit 1
+fi
+
+shift
+
+echo %j "$SLURM_JOB_NAME"
+
+CMD="python experiments/lora_glue.py \
+--task_name $task_name \
+--model_name_or_path $model \
+--per_device_train_batch_size 32 \
+--per_device_eval_batch_size 32 \
+--with_tracking \
+--seed $seed \
+--balance_type $balance \
+--checkpointing_steps epoch \
+--output_dir checkpoints/glue/$task_name/$model/$balance/$seed \
+$*"
+
+echo "$CMD"
+eval "$CMD"
