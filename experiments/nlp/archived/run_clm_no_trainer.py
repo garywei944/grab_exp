@@ -76,7 +76,7 @@ MODEL_TYPES = tuple(conf.model_type for conf in MODEL_CONFIG_CLASSES)
 import sys
 
 # Change pwd to the project root directory
-PROJECT_NAME = "GraB-lib"
+PROJECT_NAME = "grab_exp"
 PROJECT_PATH = Path(__file__).resolve()
 while PROJECT_PATH.name != PROJECT_NAME:
     PROJECT_PATH = PROJECT_PATH.parent

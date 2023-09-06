@@ -18,7 +18,7 @@ from torchmetrics import Accuracy
 from accelerate.utils import set_seed
 
 # Change pwd to the project root directory
-PROJECT_NAME = "GraB-lib"
+PROJECT_NAME = "grab_exp"
 PROJECT_PATH = Path(__file__).resolve()
 while PROJECT_PATH.name != PROJECT_NAME:
     PROJECT_PATH = PROJECT_PATH.parent

@@ -1,6 +1,6 @@
 from torchvision import datasets
 
-cifar_trainset = datasets.CIFAR10(root="~/projects/GraB-lib/data/external", train=True, download=True)
+cifar_trainset = datasets.CIFAR10(root="~/projects/grab_exp/data/external", train=True, download=True)
 data = cifar_trainset.data / 255  # data is numpy array
 
 mean = data.mean(axis=(0, 1, 2))

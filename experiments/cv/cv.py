@@ -27,7 +27,7 @@ from grablib import GraBSampler, BalanceType
 from grablib.utils import EventTimer, pretty_time
 
 # Change pwd to the project root directory
-PROJECT_NAME = "GraB-lib"
+PROJECT_NAME = "grab_exp"
 PROJECT_PATH = Path(__file__).resolve()
 while PROJECT_PATH.name != PROJECT_NAME:
     PROJECT_PATH = PROJECT_PATH.parent
