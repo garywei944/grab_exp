@@ -24,6 +24,7 @@ dependencies:
   - omegaconf # for config
   - tqdm
   - attrs
+  - tabulate
 
   # Frameworks
   - numpy~=1.25.1

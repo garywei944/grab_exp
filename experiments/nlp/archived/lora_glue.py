@@ -779,10 +779,10 @@ def main():
             if accelerator.num_processes > 1:
                 if step == len(eval_dataloader) - 1:
                     predictions = predictions[
-                        : len(eval_dataloader.dataset) - samples_seen
+                        : len(eval_dataloader.dataset_name) - samples_seen
                     ]
                     references = references[
-                        : len(eval_dataloader.dataset) - samples_seen
+                        : len(eval_dataloader.dataset_name) - samples_seen
                     ]
                 else:
                     samples_seen += references.shape[0]

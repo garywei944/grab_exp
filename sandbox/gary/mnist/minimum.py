@@ -76,7 +76,7 @@ def main():
             optimizer.step()
             if batch_idx % args.logging_steps == 0:
                 print(
-                    f"Train Epoch: {epoch} [{batch_idx * len(data)}/{len(train_loader.dataset)} ({100. * batch_idx / len(train_loader):.0f}%)]\tLoss: {loss.item():.6f}"
+                    f"Train Epoch: {epoch} [{batch_idx * len(data)}/{len(train_loader.dataset_name)} ({100. * batch_idx / len(train_loader):.0f}%)]\tLoss: {loss.item():.6f}"
                 )
         model.eval()
         test_loss = 0
@@ -88,9 +88,9 @@ def main():
                 test_loss += loss_fn(output, target).item()
                 pred = output.argmax(dim=1, keepdim=True)
                 correct += pred.eq(target.view_as(pred)).sum().item()
-        test_loss /= len(test_loader.dataset)
+        test_loss /= len(test_loader.dataset_name)
         print(
-            f"\nTest set: Average loss: {test_loss:.4f}, Accuracy: {correct}/{len(test_loader.dataset)} ({100. * correct / len(test_loader.dataset):.0f}%)\n"
+            f"\nTest set: Average loss: {test_loss:.4f}, Accuracy: {correct}/{len(test_loader.dataset_name)} ({100. * correct / len(test_loader.dataset_name):.0f}%)\n"
         )
 
 

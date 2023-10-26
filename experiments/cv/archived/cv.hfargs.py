@@ -1,7 +1,9 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-from functools import partial
+from functools import partial, reduce
+from pathlib import Path
+from dataclasses import dataclass, field
 
 import evaluate
 import numpy as np
@@ -9,14 +11,12 @@ import pandas as pd
 import wandb
 from tqdm import tqdm
 from absl import logging
-from tabulate import tabulate
-from typing import Literal
+from pprint import pprint
 
 import torch
-from torch import nn
-from torch.utils.data import Subset, DataLoader
+import torch.nn as nn
 from torchvision import datasets, transforms
-from transformers import set_seed
+from transformers import HfArgumentParser, TrainingArguments, set_seed
 
 import torchopt
 from torch.func import grad, grad_and_value, vmap, functional_call
@@ -29,31 +29,53 @@ from cd2root import cd2root
 cd2root()
 
 from experiments.utils.func_helpers import make_func_params
-from experiments.utils.arguments import GraBArguments, TrainArgs
+from experiments.utils.arguments import GraBArguments
 
 DATASETS = ["mnist", "fashion_mnist", "cifar10", "cifar100"]
 MODELS = ["lr", "lenet", "resnet", "minnet"]
 
 
-class Args(GraBArguments, TrainArgs):
-    dataset_name: Literal[tuple(DATASETS)] = "mnist"  # Which dataset to use
-    model_name: Literal[tuple(MODELS)] = "lr"  # Which model to use
-    num_train_examples: int = None  # Number of samples to use for training
-    num_test_examples: int = None  # Number of samples to use for testing
-    resnet_depth: int = 8  # Depth of ResNet
+@dataclass
+class Arguments:
+    """
+    Arguments pertaining to what data we are going to input our model for training and eval.
 
-    def configure(self) -> None:
-        GraBArguments.configure(self)
-        TrainArgs.configure(self)
+    Using `HfArgumentParser` we can turn this class
+    into argparse arguments to be able to specify them on
+    the command line.
+    """
 
-        self.add_argument("-d", "--dataset_name")
-        self.add_argument("-model", "--model_name")
-        self.add_argument("-ntr", "--num_train_examples")
-        self.add_argument("-nte", "--num_test_examples")
-
-    def process_args(self) -> None:
-        GraBArguments.process_args(self)
-        TrainArgs.process_args(self)
+    # Task specific arguments
+    dataset: str = field(
+        default=DATASETS[0],
+        metadata={"help": "Which dataset to use", "choices": DATASETS},
+    )
+    num_train_examples: int = field(
+        default=None,
+        metadata={"help": "Number of samples to use for training"},
+    )
+    num_test_examples: int = field(
+        default=None,
+        metadata={"help": "Number of samples to use for testing"},
+    )
+    model_name: str = field(
+        default=MODELS[0],
+        metadata={"help": "Which model to use", "choices": MODELS},
+    )
+    resnet_depth: int = field(
+        default=8,
+        metadata={
+            "help": "Depth of ResNet",
+        },
+    )
+    optimizer: str = field(
+        default="sgd",
+        metadata={
+            "help": "Which optimizer to use",
+            "choices": ["sgd", "adam", "adamw"],
+        },
+    )
+    momentum: float = field(default=0.9, metadata={"help": "Momentum for SGD"})
 
 
 def compute_loss(model, loss_fn, params, buffers, inputs, targets):
@@ -75,7 +97,7 @@ def train(
     no_tqdm: bool = False,
     device: torch.device = torch.device("cuda"),
 ):
-    running_loss, n = 0, 0
+    running_loss = 0
     for _, (x, y) in tqdm(
         enumerate(train_loader), total=len(train_loader), leave=False, disable=no_tqdm
     ):
@@ -93,11 +115,12 @@ def train(
         )  # get updates
         params = torchopt.apply_updates(params, updates)  # update network parameters
 
-        running_loss += batch_loss.sum().item()
-        n += len(batch_loss)
+        running_loss += batch_loss.mean().item()
+        if torch.isnan(batch_loss.mean()):
+            raise ValueError
         metric.add_batch(predictions=logits.argmax(dim=-1), references=y)
 
-    return running_loss / n
+    return running_loss / len(train_loader)
 
 
 # validation function
@@ -110,7 +133,7 @@ def validate(
     no_tqdm=False,
     device: torch.device = torch.device("cuda"),
 ):
-    running_loss, n = 0, 0
+    running_loss = 0.0
     # look over the validation dataloader
     for _, (x, y) in tqdm(
         enumerate(test_loader), total=len(test_loader), leave=False, disable=no_tqdm
@@ -119,46 +142,65 @@ def validate(
         y = y.to(device)
         outputs = model(x)
         loss = loss_fn(outputs, y)
-        running_loss += loss.item() * x.shape[0]
-        n += x.shape[0]
+        running_loss += loss.item()
         metric.add_batch(predictions=outputs.argmax(dim=-1), references=y)
-    return running_loss / n
+    return running_loss / len(test_loader)
 
 
 def main():
-    args = Args().parse_args()
+    # See all possible arguments in src/transformers/training_args.py
+    # or by passing the --help flag to this script.
+    # We now keep distinct sets of args, for a cleaner separation of concerns.
+    parser = HfArgumentParser((Arguments, GraBArguments, TrainingArguments))
+
+    # Only for PyCharm type hint
+    args: Arguments
+    grab_args: GraBArguments
+    training_args: TrainingArguments
+    args, grab_args, training_args = parser.parse_args_into_dataclasses()
 
     # Initialize a wandb run
     wandb.init(
-        project=f"grab-{args.dataset_name}"
-        if args.wandb_project is None
-        else args.wandb_project,
+        project=f"grab-{args.dataset}"
+        if grab_args.wandb_project is None
+        else grab_args.wandb_project,
         entity="grab",
-        mode="online" if args.wandb else "offline",
-        config=args.as_dict(),
+        mode="online" if grab_args.use_wandb else "offline",
+        config={
+            **vars(args),
+            **vars(grab_args),
+            **vars(training_args),
+        },
     )
 
     # Set up exp_id and checkpoint path
-    exp_id = get_exp_id(args)
+    exp_id = get_exp_id(args, grab_args, training_args)
     checkpoint_path = (
-        args.output_path / args.dataset_name / args.model_name / str(args.balance_type)
+        Path(training_args.output_dir)
+        / args.dataset
+        / args.model_name
+        / grab_args.balance_type
     )
     checkpoint_path.mkdir(parents=True, exist_ok=True)
 
     # Set up device, dtype, seed, logging, and timer
-    device = args.device
-    dtype = args.dtype
-    if args.seed is not None:
-        set_seed(args.seed)
+    device = training_args.device
+    if training_args.fp16:
+        dtype = torch.float16
+    elif training_args.bf16:
+        dtype = torch.bfloat16
+    else:
+        dtype = torch.float32
+    set_seed(training_args.seed)
     logging.set_verbosity(logging.INFO)
     timer = EventTimer(device=device)
 
     # Set dtype, only used for the sampler
     logging.info(f"Experiment ID: {exp_id}")
-    print(tabulate(args.as_dict().items()))
+    pprint(dict(wandb.config))
 
     # Load the dataset
-    if args.dataset_name == "mnist":
+    if args.dataset == "mnist":
         if args.model_name == "lr":
             transform = transforms.Compose(
                 [
@@ -181,7 +223,7 @@ def main():
         in_dim, num_classes = 784, 10
 
         loss_fn = nn.CrossEntropyLoss().to(device)
-    elif args.dataset_name == "fashion_mnist":
+    elif args.dataset == "fashion_mnist":
         # https://www.kaggle.com/code/leifuer/intro-to-pytorch-fashion-mnist
         # Define a transform to normalize the data
         if args.model_name == "lr":
@@ -208,7 +250,7 @@ def main():
         in_dim, num_classes = 784, 10
 
         loss_fn = nn.CrossEntropyLoss().to(device)
-    elif args.dataset_name == "cifar10":
+    elif args.dataset == "cifar10":
         transform = transforms.Compose(
             [
                 transforms.ToTensor(),
@@ -230,7 +272,7 @@ def main():
         in_dim, num_classes = 3, 10
 
         loss_fn = nn.CrossEntropyLoss().to(device)
-    elif args.dataset_name == "cifar100":
+    elif args.dataset == "cifar100":
         transform = transforms.Compose(
             [
                 transforms.ToTensor(),
@@ -257,9 +299,13 @@ def main():
 
     # Use a subset of training examples
     if args.num_train_examples is not None:
-        train_dataset = Subset(train_dataset, range(args.num_train_examples))
+        train_dataset = torch.utils.data.Subset(
+            train_dataset, range(args.num_train_examples)
+        )
     if args.num_test_examples is not None:
-        test_dataset = Subset(test_dataset, range(args.num_test_examples))
+        test_dataset = torch.utils.data.Subset(
+            test_dataset, range(args.num_test_examples)
+        )
 
     # Create metrics
     train_metric = evaluate.load("accuracy")
@@ -268,26 +314,25 @@ def main():
 
     # Load the model
     # enforce that the same seed use the same model initialization
-    if args.seed is not None:
-        set_seed(args.seed)
+    set_seed(training_args.seed)
     if args.model_name == "lr":
-        assert args.dataset_name in ["mnist", "fashion_mnist"]
+        assert args.dataset in ["mnist", "fashion_mnist"]
 
         model = nn.Linear(in_dim, num_classes).to(device)
     elif args.model_name == "lenet":
-        assert args.dataset_name in ["cifar10", "cifar100"]
+        assert args.dataset in ["cifar10", "cifar100"]
         from models import LeNet
 
         model = LeNet(in_dim, num_classes).to(device)
     elif args.model_name == "resnet":
-        assert args.dataset_name == "cifar10"
+        assert args.dataset == "cifar10"
         from models import ResNet
 
         model = ResNet(
             depth=args.resnet_depth, num_classes=num_classes, norm_type="in"
         ).to(device)
     elif args.model_name == "minnet":
-        assert args.dataset_name in ["mnist", "fashion_mnist"]
+        assert args.dataset in ["mnist", "fashion_mnist"]
         from models import MinNet
 
         model = MinNet().to(device)
@@ -301,15 +346,16 @@ def main():
     # Initiate optimizer
     if args.optimizer == "sgd":
         optimizer = torchopt.sgd(
-            args.learning_rate,
-            momentum=args.adam_beta1,
-            weight_decay=args.weight_decay,
+            training_args.learning_rate,
+            momentum=args.momentum,
+            weight_decay=training_args.weight_decay,
         )
     elif args.optimizer in ["adam", "adamw"]:
         optimizer = torchopt.adamw(
-            args.learning_rate,
-            betas=(args.adam_beta1, args.adam_beta2),
-            weight_decay=args.weight_decay,
+            training_args.learning_rate,
+            betas=(training_args.adam_beta1, training_args.adam_beta2),
+            eps=training_args.adam_epsilon,
+            weight_decay=training_args.weight_decay,
             use_accelerated_op=True,
         )
     else:
@@ -324,8 +370,8 @@ def main():
 
     # Load orders for FixedOrdering
     orders = None
-    if args.order_path is not None:
-        orders = torch.load(args.order_path)
+    if grab_args.order_path is not None:
+        orders = torch.load(grab_args.order_path)
         if len(orders.shape) == 2:
             orders = orders[-1].tolist()
         else:
@@ -334,14 +380,19 @@ def main():
     sampler = GraBSampler(
         train_dataset,
         params,
+        batch_size=training_args.train_batch_size,
+        # Random projection
+        seed=training_args.seed,  # Only used for generating random projection
         # Probabilistic balance
         orders=orders,
         # Other specific
+        dtype=dtype,
+        device=device,
         timer=timer,
-        record_herding=args.report_grads,
+        record_herding=grab_args.record_grads,
         stale_mean_herding=False,
-        cuda_herding=not args.cpu_herding,
-        record_norm=args.report_grads,
+        cuda_herding=not grab_args.cpu_herding,
+        record_norm=grab_args.record_grads,
         # For NTK
         model=model,
         params=params,
@@ -349,29 +400,32 @@ def main():
         loss_fn=loss_fn,
         dataset=train_dataset,
         kernel_dtype=torch.float32,
-        **args.as_dict(),
+        **vars(grab_args),
     )
 
     # Initiate data loaders
-    train_loader = DataLoader(
+    train_loader = torch.utils.data.DataLoader(
         dataset=train_dataset,
-        batch_size=args.batch_size,
+        batch_size=training_args.train_batch_size,
         sampler=sampler,
         persistent_workers=False,
-        num_workers=args.num_workers,
+        num_workers=training_args.dataloader_num_workers,
+        pin_memory=training_args.dataloader_pin_memory,
     )
-    train_eval_loader = DataLoader(
+    train_eval_loader = torch.utils.data.DataLoader(
         dataset=train_dataset,
-        batch_size=args.eval_batch_size,
+        batch_size=training_args.eval_batch_size,
         persistent_workers=False,
-        num_workers=args.num_workers,
+        num_workers=training_args.dataloader_num_workers,
+        pin_memory=training_args.dataloader_pin_memory,
     )
 
-    test_loader = DataLoader(
+    test_loader = torch.utils.data.DataLoader(
         dataset=test_dataset,
-        batch_size=args.eval_batch_size,
+        batch_size=training_args.eval_batch_size,
         persistent_workers=False,
-        num_workers=args.num_workers,
+        num_workers=training_args.dataloader_num_workers,
+        pin_memory=training_args.dataloader_pin_memory,
     )
 
     # ft_compute_sample_grad = vmap(
@@ -389,13 +443,22 @@ def main():
     df_grad_norms = pd.DataFrame()
 
     # loop over the dataloader multiple times
-    epochs = int(args.epochs)
+    epochs = int(training_args.num_train_epochs)
 
-    for epoch in range(0 if args.log_first_step else 1, epochs + 1):
+    for epoch in range(0 if training_args.logging_first_step else 1, epochs + 1):
         logs = {}
 
         # Only evaluate before the first epoch
         if epoch != 0:
+            # compute orders if we are using ntk balance
+            if grab_args.balance_type == BalanceType.NTK_EIGEN.value:
+                sampler.sorter.compute_order(
+                    model=model,
+                    params=params,
+                    buffers=buffers,
+                    loss_fn=loss_fn,
+                )
+
             with timer(f"train"):
                 # perform training (single loop over the train dataloader)
                 train_loss = train(
@@ -407,7 +470,7 @@ def main():
                     optimizer=optimizer,
                     opt_state=opt_state,
                     metric=train_metric,
-                    no_tqdm=not args.tqdm,
+                    no_tqdm=training_args.disable_tqdm,
                     device=device,
                 )
             train_acc = train_metric.compute()["accuracy"]
@@ -419,7 +482,7 @@ def main():
                 }
             )
 
-            if args.report_grads:
+            if grab_args.record_grads:
                 grad_norms = sampler.sorter.grad_norms
 
                 # Save the norms
@@ -447,7 +510,7 @@ def main():
                 model=model,
                 loss_fn=loss_fn,
                 metric=train_eval_metric,
-                no_tqdm=not args.tqdm,
+                no_tqdm=training_args.disable_tqdm,
                 device=device,
             )
             # perform validation (single loop over the validation dataloader)
@@ -456,7 +519,7 @@ def main():
                 model=model,
                 loss_fn=loss_fn,
                 metric=val_metric,
-                no_tqdm=not args.tqdm,
+                no_tqdm=training_args.disable_tqdm,
                 device=device,
             )
 
@@ -494,7 +557,7 @@ def main():
                 f'train: {pretty_time(timer["train"][-1])} '
                 f'val: {pretty_time(timer["val"][-1])}'
             )
-            if args.report_grads:
+            if grab_args.record_grads:
                 log_msg += (
                     f" | norm_mean: {norm_mean:.2f} "
                     f"norm_std: {norm_std:.2f} "
@@ -505,12 +568,12 @@ def main():
             print(log_msg)
 
         # save checkpoint
-        if args.save_strategy == "epoch":
+        if training_args.save_strategy == "epoch":
             checkpoint_name = exp_id + f"_epoch_{epoch}.pt"
             torch.save(model.state_dict(), checkpoint_path / checkpoint_name)
 
         if epoch > 0:
-            if args.report_grads:
+            if grab_args.record_grads:
                 # Save the grad norms
                 df_grad_norms.describe().to_csv(
                     checkpoint_path / f"{exp_id}_{epochs}_grad_norms_proc.csv"
@@ -522,7 +585,7 @@ def main():
             )
 
         # Save the orders
-        if args.record_orders:
+        if grab_args.record_orders:
             torch.save(
                 torch.tensor(sampler.orders_history),
                 checkpoint_path / f"{exp_id}_{epochs}_orders_proc.pt",
@@ -531,7 +594,7 @@ def main():
 
     print(torch.cuda.memory_summary())
 
-    if args.report_grads:
+    if grab_args.record_grads:
         print("-" * 50)
         print(df_grad_norms.describe())
 
@@ -553,13 +616,13 @@ def main():
     # Save the timer
     timer.save(checkpoint_path / f"{exp_id}_{epochs}_timer.pt")
     timer.summary().to_csv(checkpoint_path / f"{exp_id}_{epochs}_timer.csv")
-    if args.report_grads:
+    if grab_args.record_grads:
         # Save the grad norms
         df_grad_norms.describe().to_csv(
             checkpoint_path / f"{exp_id}_{epochs}_grad_norms.csv"
         )
 
-    if args.record_orders:
+    if grab_args.record_orders:
         # Save the orders
         torch.save(
             torch.tensor(sampler.orders_history),
@@ -567,30 +630,32 @@ def main():
         )
 
 
-def get_exp_id(args: Args):
+def get_exp_id(
+    args: Arguments, grab_args: GraBArguments, training_args: TrainingArguments
+):
     # Unique experiment name for checkpoints
     exp_id = (
-        f"{args.dataset_name}_{args.model_name}_{args.balance_type}"
-        f"_{args.optimizer}_lr_{args.learning_rate}"
-        f"_wd_{args.weight_decay}"
-        f"_b_{args.batch_size}_seed_{args.seed}"
+        f"{args.dataset}_{args.model_name}_{grab_args.balance_type}"
+        f"_{args.optimizer}_lr_{training_args.learning_rate}"
+        f"_wd_{training_args.weight_decay}"
+        f"_b_{training_args.train_batch_size}_seed_{training_args.seed}"
     )
 
-    if args.normalize_grad:
+    if grab_args.normalize_grads:
         exp_id += "_norm"
-    if args.random_projection:
-        exp_id += f"_pi_{args.random_projection_eps}"
-    if args.prob_balance:
-        exp_id += f"_prob_{args.prob_balance_c:.1f}"
-    if args.balance_type in [
+    if grab_args.random_projection:
+        exp_id += f"_pi_{grab_args.random_projection_eps}"
+    if grab_args.prob_balance:
+        exp_id += f"_prob_{grab_args.prob_balance_c:.1f}"
+    if grab_args.balance_type in [
         BalanceType.RECURSIVE_BALANCE,
         BalanceType.RECURSIVE_PAIR_BALANCE,
     ]:
-        exp_id += f"_depth_{args.depth}"
-    if not args.random_first_epoch:
+        exp_id += f"_depth_{grab_args.depth}"
+    if not grab_args.random_first_epoch:
         exp_id += "_no_rr"
-    if args.balance_type == BalanceType.EMA_BALANCE:
-        exp_id += f"_ema_{args.ema_decay}"
+    if grab_args.balance_type == BalanceType.EMA_BALANCE:
+        exp_id += f"_ema_{grab_args.ema_decay}"
 
     return exp_id
 

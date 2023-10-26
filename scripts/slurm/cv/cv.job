@@ -9,31 +9,11 @@
 #SBATCH --partition=gpu,desa                     # Request partition
 #SBATCH --gres=gpu:1                  # Type/number of GPUs needed
 
-dataset=$1
-shift
-model=$1
-shift
-balance=$1
-shift
-seed=$1
-
-if [ -z "$1" ]; then
-  echo "Usage: $0 <dataset> <model_name> <balance> <seed> <args>"
-  exit 1
-fi
-
-shift
-
 CMD="python experiments/cv/cv.py \
---dataset $dataset \
---model_name $model \
---balance_type $balance \
---seed $seed \
---num_train_epochs 100 \
---output_dir checkpoints \
---dataloader_num_workers 1 \
---use_wandb \
---disable_tqdm 1 \
+--epochs 100 \
+-nw 1 \
+--wandb \
+--tqdm 0 \
 $*"
 
 echo "$CMD"

@@ -1,131 +1,107 @@
-from dataclasses import dataclass, field
-from grablib import BalanceType
-from grablib.utils.random_projection import RandomProjectionType
+import torch
+
+from typing import Literal
+from tap import Tap
+from pathlib import Path
+
+from grabsampler import BalanceType
+from grabsampler.utils.random_projection import RandomProjectionType
 
 
-@dataclass
-class GraBArguments:
+class GraBArguments(Tap):
+    balance_type: BalanceType = (
+        BalanceType.MEAN_BALANCE
+    )  # Balance type for GraB-Sampler
+    random_first_epoch: bool = True  # Whether to use random reshuffling the first epoch
+    prob_balance: bool = False  # Whether to use probabilistic balance
+    prob_balance_c: float = 30  # Coefficient of probabilistic balance
+
+    depth: int = 5  # Depth of Recursive Balance
+    normalize_grad: bool = False  # Whether to normalize gradients before GraB
+    random_projection: RandomProjectionType = (
+        RandomProjectionType.NONE
+    )  # Whether to use random projection before GraB, i.e. balance PI@g
+    random_projection_eps: float = 0.1  # Epsilon of JL Lemma
+    kron_order: int = 2
     """
-    Arguments pertaining to what data we are going to input our model for training and eval.
-
-    Using `HfArgumentParser` we can turn this class
-    into argparse arguments to be able to specify them on
-    the command line.
+    Order of Kronecker product of random project matrices, i.e. number of element
+    matrices to use to construct the final projection matrix
     """
-
-    # GraB specific arguments
-    balance_type: str = field(
-        default=BalanceType.MEAN_BALANCE.value,
-        metadata={
-            "help": "Balance type for GraBSampler",
-            "choices": [e.value for e in BalanceType],
-        },
-    )
-    depth: int = field(default=5, metadata={"help": "Recursive depth of GraB"})
-    normalize_grads: bool = field(
-        default=False, metadata={"help": "Whether to normalize gradients before GraB"}
-    )
-    random_projection: str = field(
-        default=RandomProjectionType.NONE.value,
-        metadata={
-            "help": "Whether to use random projection before GraB, i.e. balance PI@g "
-            "instead of g",
-            "choices": [e.value for e in RandomProjectionType],
-        },
-    )
-    random_projection_eps: float = field(
-        default=0.1, metadata={"help": "Epsilon of JL Lemma"}
-    )
-    kron_order: int = field(
-        default=2,
-        metadata={
-            "help": "Order of Kronecker product of random project matrices, i.e. "
-            "number of element matrices to use to construct the final projection matrix"
-        },
-    )
-    prob_balance: bool = field(
-        default=False, metadata={"help": "Whether to use probabilistic balance"}
-    )
-    prob_balance_c: float = field(
-        default=30, metadata={"help": "Coefficient of probabilistic balance"}
-    )
-    random_first_epoch: bool = field(
-        default=True,
-        metadata={"help": "Whether to use random reshuffling the first epoch"},
-    )
 
     # EMA Balance
-    ema_decay: float = field(
-        default=0.1, metadata={"help": "Decay rate of exponential moving average"}
-    )
+    ema_decay: float = 0.1  # Decay rate of exponential moving average
 
     # Fixed Order
-    order_path: str = field(
-        default=None,
-        metadata={"help": "Path to the orders pt file, only used by FixedOrdering"},
-    )
-
-    # NTK based
-    centered_feature_map: bool = field(
-        default=False,
-        metadata={
-            "help": "Whether to substitute the per-sample gradient with its mean"
-        },
-    )
-    largest_eig: bool = field(
-        default=False,
-        metadata={
-            "help": "Whether to use the largest eigenvalue of the Kernel to find an order"
-        },
-    )
-    descending_eig: bool = field(
-        default=False,
-        metadata={
-            "help": "Whether to use the descending order of the eigenvector to find an order"
-        },
-    )
-    abs_eig: bool = field(
-        default=False,
-        metadata={
-            "help": "Whether to use the absolute value of the eigenvector to find an order"
-        },
-    )
-    save_k: bool = field(
-        default=False,
-        metadata={
-            "help": "Whether to save the kernel matrix during training, only for research purposes."
-        },
-    )
-    kernel_device: str = field(
-        default="cuda",
-        metadata={
-            "help": "Device to store the kernel matrix of size (n, n)",
-        },
-    )
-
-    # Order by Norm
-    descending_norm: bool = field(
-        default=True,
-        metadata={
-            "help": "Whether to use the descending order of the norm to find an order"
-        },
-    )
+    order_path: Path = None  # Path to the orders pt file, only used by FixedOrdering
 
     # Experiment specific arguments
-    record_orders: bool = field(
-        default=True, metadata={"help": "Whether to record orders"}
-    )
-    record_grads: bool = field(
-        default=False,
-        metadata={
-            "help": "Whether to record norms, herding, and average gradient errors"
-        },
-    )
-    cpu_herding: bool = field(
-        default=False, metadata={"help": "Whether to use CPU herding"}
-    )
-    use_wandb: bool = field(default=False, metadata={"help": "Whether to use wandb"})
-    wandb_project: str = field(
-        default=None,
-        metadata={"help": "Wandb project name"},
-    )
+    record_orders: bool = False  # Whether to record the orders
+    report_grads: bool = False
+    "Whether to report norms, herding, and average gradient errors"
+    cpu_herding: bool = False  # Whether to use CPU herding
+
+    def configure(self) -> None:
+        self.add_argument("-bt", "--balance_type")
+        self.add_argument("-rfe", "--random_first_epoch")
+        self.add_argument("-prob", "--prob_balance")
+        self.add_argument("-c", "--prob_balance_c")
+        self.add_argument("-norm", "--normalize_grad")
+        self.add_argument("-rp", "--random_projection")
+        self.add_argument("-rpe", "--random_projection_eps")
+        self.add_argument("-ko", "--kron_order")
+        self.add_argument("-ro", "--record_orders")
+        self.add_argument("-rg", "--report_grads")
+
+
+class TrainArgs(Tap):
+    optimizer: Literal["adam", "adamw", "sgd"] = "adam"  # Optimizer
+    learning_rate: float = 1e-3  # Learning rate
+    adam_beta1: float = 0.9  # Adam beta1 / momentum
+    adam_beta2: float = 0.999  # Adam beta2
+    weight_decay: float = 0.01  # Weight decay
+    batch_size: int = 16  # Batch size
+    eval_batch_size: int = 64  # Evaluation batch size
+    epochs: int = 100  # Number of epochs
+    max_iter: int = int(1e6)  # Maximum number of iterations
+    num_workers: int = 1  # Number of workers for data loading
+    log_freq: int = 100  # Logging frequency
+    log_first_step: bool = False  # Log first step before training
+    checkpoint: Path = None  # Path to checkpoint
+    save_steps: int = int(1e4)  # Save steps
+    save_strategy: Literal["no", "epoch", "steps"] = "steps"  # Save strategy
+    seed: int = 42  # Random seed
+    wandb: bool = False  # Use wandb for logging
+    wandb_project: str = None  # Wandb project name
+    tqdm: bool = True  # Disable tqdm progress bar
+    device: torch.device = torch.device(
+        "cuda" if torch.cuda.is_available() else "cpu"
+    )  # PyTorch Device
+    fp16: bool = False  # Use mixed precision training
+    bf16: bool = False
+    output_path: Path = Path("checkpoints")
+
+    def configure(self) -> None:
+        self.add_argument("-opt", "--optimizer")
+        self.add_argument("-lr", "--learning_rate")
+        self.add_argument("-b1", "--adam_beta1")
+        self.add_argument("-b2", "--adam_beta2")
+        self.add_argument("-wd", "--weight_decay")
+        self.add_argument("-b", "--batch_size")
+        self.add_argument("-eb", "--eval_batch_size")
+        self.add_argument("-e", "--epochs")
+        self.add_argument("-T", "--max_iter")
+        self.add_argument("-nw", "--num_workers")
+        self.add_argument("-lf", "--log_freq")
+        self.add_argument("-lfs", "--log_first_step")
+        self.add_argument("-ckpt", "--checkpoint")
+        self.add_argument("-s", "--seed")
+        self.add_argument("-wp", "--wandb_project")
+        self.add_argument("-od", "--output_path")
+
+    def process_args(self) -> None:
+        if self.bf16:
+            self.dtype = torch.bfloat16
+        elif self.fp16:
+            self.dtype = torch.float16
+        else:
+            self.dtype = torch.float32

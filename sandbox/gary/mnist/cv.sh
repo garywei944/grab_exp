@@ -7,12 +7,11 @@ cmd="python -u experiments/cv/cv.py \
   --optimizer adam \
   --seed 42 \
   --random_first_epoch 1 \
-  --num_train_epochs 10 \
+  -e 10 \
   --output_dir checkpoints \
   --dataloader_num_workers 1 \
   --learning_rate 0.001 \
   --weight_decay 0.01 \
-  --momentum 0 \
   --per_device_train_batch_size 64 \
   --per_device_eval_batch_size 1024 \
   --resnet_depth 2 \
