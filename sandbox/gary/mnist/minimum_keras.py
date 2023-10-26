@@ -80,7 +80,7 @@ l = Dense(10, activation="softmax")(l)
 
 model = Model(inputs, l)
 
-score = model.evaluate(x_test, y_test, verbose=1)
+score = model.validate(x_test, y_test, verbose=1)
 print("\n")
 print("Test score: ", score[0])
 print("Test accuracy: ", score[1])
