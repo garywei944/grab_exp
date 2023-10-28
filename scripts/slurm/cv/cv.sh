@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# best lr sgd 0.01 wd 0.01 momentum 0
+# MNIST best lr sgd 0.01 wd 0.01 momentum 0
 
 DATASET=cifar10
 mkdir -p logs/$DATASET
@@ -12,11 +12,11 @@ for seed in 1 2 3; do
         sbatch -J $DATASET scripts/slurm/cv/cv.job \
           -d $DATASET \
           -model lenet \
+          -bt $balance \
           --seed $seed \
           --random_first_epoch 1 \
           --epochs 100 \
-          -opt sgd \
-          -b1 0 \
+          -opt adam \
           -lr $lr \
           -wd $wd \
           -b 16 \

@@ -96,7 +96,7 @@ class TrainArgs(Tap):
         self.add_argument("-ckpt", "--checkpoint")
         self.add_argument("-s", "--seed")
         self.add_argument("-wp", "--wandb_project")
-        self.add_argument("-od", "--output_path")
+        self.add_argument("-op", "--output_path")
 
     def process_args(self) -> None:
         if self.bf16:
