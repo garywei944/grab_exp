@@ -10,7 +10,6 @@
 #SBATCH --gres=gpu:1                  # Type/number of GPUs needed
 
 CMD="python experiments/cv/cv.py \
---epochs 100 \
 -nw 1 \
 --wandb \
 --tqdm 0 \
