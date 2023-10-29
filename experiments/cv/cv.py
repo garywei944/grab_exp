@@ -478,7 +478,10 @@ def main():
         disable=not train_args.tqdm,
     )
     for epoch in range(train_args.epochs + 1):
-        logs = {}
+        logs = {
+            "epoch": epoch,
+            "iteration": epoch * len(train_loader),
+        }
 
         if epoch != 0:
             with timer("train"):

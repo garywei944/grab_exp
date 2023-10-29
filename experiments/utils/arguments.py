@@ -88,6 +88,7 @@ class GraBArgs:
 
     def __post_init__(self):
         self.balance_type = BalanceType(self.balance_type)
+        self.random_projection = RandomProjectionType(self.random_projection)
 
 
 @dataclass
