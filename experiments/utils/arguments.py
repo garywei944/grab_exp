@@ -1,107 +1,271 @@
 import torch
 
-from typing import Literal
-from tap import Tap
 from pathlib import Path
+from dataclasses import dataclass, field
+
+from transformers import HfArgumentParser
 
 from grabsampler import BalanceType
 from grabsampler.utils.random_projection import RandomProjectionType
 
 
-class GraBArguments(Tap):
-    balance_type: BalanceType = (
-        BalanceType.MEAN_BALANCE
-    )  # Balance type for GraB-Sampler
-    random_first_epoch: bool = True  # Whether to use random reshuffling the first epoch
-    prob_balance: bool = False  # Whether to use probabilistic balance
-    prob_balance_c: float = 30  # Coefficient of probabilistic balance
+@dataclass
+class GraBArgs:
+    balance_type: BalanceType = field(
+        default=BalanceType.MEAN_BALANCE,
+        metadata={
+            "aliases": ["-bt"],
+            "choices": BalanceType,
+            "help": "Balance type for GraBSampler",
+        },
+    )
+    random_first_epoch: bool = field(
+        default=True,
+        metadata={
+            "aliases": ["-rfe"],
+            "help": "Whether to use random reshuffling the first epoch",
+        },
+    )
+    prob_balance: bool = field(
+        default=False,
+        metadata={"aliases": ["-prob"], "help": "Whether to use probabilistic balance"},
+    )
+    prob_balance_c: float = field(
+        default=30,
+        metadata={"aliases": ["-c"], "help": "Coefficient of probabilistic balance"},
+    )
+    depth: int = field(default=5, metadata={"help": "Recursive depth of GraB"})
+    normalize_grad: bool = field(
+        default=False,
+        metadata={
+            "aliases": ["-norm"],
+            "help": "Whether to normalize gradients before GraB",
+        },
+    )
+    random_projection: RandomProjectionType = field(
+        default=RandomProjectionType.NONE,
+        metadata={
+            "aliases": ["-rp"],
+            "choices": RandomProjectionType,
+            "help": "Whether to use random projection before GraB, i.e. balance PI@g "
+            "instead of g",
+        },
+    )
+    random_projection_eps: float = field(
+        default=0.1, metadata={"aliases": ["-rpe"], "help": "Epsilon of JL Lemma"}
+    )
+    kron_order: int = field(
+        default=2,
+        metadata={
+            "aliases": ["-ko"],
+            "help": "Order of Kronecker product of random project matrices, i.e. "
+            "number of element matrices to use to construct the final projection matrix",
+        },
+    )
+    ema_decay: float = field(
+        default=0.1, metadata={"help": "Decay rate of exponential moving average"}
+    )
+    order_path: Path = field(
+        default=None,
+        metadata={
+            "help": "Path to the orders pt file, only used by FixedOrdering",
+        },
+    )
+    record_orders: bool = field(
+        default=False, metadata={"aliases": ["-ro"], "help": "Whether to record orders"}
+    )
+    report_grads: bool = field(
+        default=False,
+        metadata={
+            "aliases": ["-rg"],
+            "help": "Whether to report norms, herding, and average gradient errors",
+        },
+    )
+    cpu_herding: bool = field(
+        default=False,
+        metadata={"aliases": ["-cpu_herding"], "help": "Whether to use CPU herding"},
+    )
 
-    depth: int = 5  # Depth of Recursive Balance
-    normalize_grad: bool = False  # Whether to normalize gradients before GraB
-    random_projection: RandomProjectionType = (
-        RandomProjectionType.NONE
-    )  # Whether to use random projection before GraB, i.e. balance PI@g
-    random_projection_eps: float = 0.1  # Epsilon of JL Lemma
-    kron_order: int = 2
-    """
-    Order of Kronecker product of random project matrices, i.e. number of element
-    matrices to use to construct the final projection matrix
-    """
-
-    # EMA Balance
-    ema_decay: float = 0.1  # Decay rate of exponential moving average
-
-    # Fixed Order
-    order_path: Path = None  # Path to the orders pt file, only used by FixedOrdering
-
-    # Experiment specific arguments
-    record_orders: bool = False  # Whether to record the orders
-    report_grads: bool = False
-    "Whether to report norms, herding, and average gradient errors"
-    cpu_herding: bool = False  # Whether to use CPU herding
-
-    def configure(self) -> None:
-        self.add_argument("-bt", "--balance_type")
-        self.add_argument("-rfe", "--random_first_epoch")
-        self.add_argument("-prob", "--prob_balance")
-        self.add_argument("-c", "--prob_balance_c")
-        self.add_argument("-norm", "--normalize_grad")
-        self.add_argument("-rp", "--random_projection")
-        self.add_argument("-rpe", "--random_projection_eps")
-        self.add_argument("-ko", "--kron_order")
-        self.add_argument("-ro", "--record_orders")
-        self.add_argument("-rg", "--report_grads")
+    def __post_init__(self):
+        self.balance_type = BalanceType(self.balance_type)
 
 
-class TrainArgs(Tap):
-    optimizer: Literal["adam", "adamw", "sgd"] = "adam"  # Optimizer
-    learning_rate: float = 1e-3  # Learning rate
-    adam_beta1: float = 0.9  # Adam beta1 / momentum
-    adam_beta2: float = 0.999  # Adam beta2
-    weight_decay: float = 0.01  # Weight decay
-    train_batch_size: int = 16  # Batch size
-    eval_batch_size: int = 64  # Evaluation batch size
-    epochs: int = 100  # Number of epochs
-    max_iter: int = int(1e6)  # Maximum number of iterations
-    num_workers: int = 1  # Number of workers for data loading
-    log_freq: int = 100  # Logging frequency
-    log_first_step: bool = False  # Log first step before training
-    checkpoint: Path = None  # Path to checkpoint
-    save_steps: int = int(1e4)  # Save steps
-    save_strategy: Literal["no", "epoch", "steps"] = "steps"  # Save strategy
-    seed: int = 42  # Random seed
-    wandb: bool = False  # Use wandb for logging
-    wandb_project: str = None  # Wandb project name
-    tqdm: bool = True  # Disable tqdm progress bar
-    device: torch.device = torch.device(
-        "cuda" if torch.cuda.is_available() else "cpu"
-    )  # PyTorch Device
-    fp16: bool = False  # Use mixed precision training
-    bf16: bool = False
-    output_path: Path = Path("checkpoints")
+@dataclass
+class TrainArgs:
+    optimizer: str = field(
+        default="adam",
+        metadata={
+            "aliases": ["-opt"],
+            "choices": ["adam", "adamw", "sgd"],
+            "help": "Optimizer",
+        },
+    )
+    learning_rate: float = field(
+        default=1e-3,
+        metadata={
+            "aliases": ["-lr"],
+            "help": "Learning rate",
+        },
+    )
+    adam_beta1: float = field(
+        default=0.9,
+        metadata={
+            "aliases": ["-b1"],
+            "help": "Adam beta1 / momentum",
+        },
+    )
+    adam_beta2: float = field(
+        default=0.999,
+        metadata={
+            "aliases": ["-b2"],
+            "help": "Adam beta2",
+        },
+    )
+    weight_decay: float = field(
+        default=0.01,
+        metadata={
+            "aliases": ["-wd"],
+            "help": "Weight decay",
+        },
+    )
+    train_batch_size: int = field(
+        default=16,
+        metadata={
+            "aliases": ["-b"],
+            "help": "Batch size",
+        },
+    )
+    eval_batch_size: int = field(
+        default=64,
+        metadata={
+            "aliases": ["-eb"],
+            "help": "Evaluation batch size",
+        },
+    )
+    epochs: int = field(
+        default=100,
+        metadata={
+            "aliases": ["-e"],
+            "help": "Number of epochs",
+        },
+    )
+    max_iter: int = field(
+        default=int(1e6),
+        metadata={
+            "aliases": ["-T"],
+            "help": "Maximum number of iterations",
+        },
+    )
+    num_workers: int = field(
+        default=1,
+        metadata={
+            "aliases": ["-nw"],
+            "help": "Number of workers for data loading",
+        },
+    )
+    log_freq: int = field(
+        default=100,
+        metadata={
+            "aliases": ["-lf"],
+            "help": "Logging frequency",
+        },
+    )
+    log_first_step: bool = field(
+        default=False,
+        metadata={
+            "aliases": ["-lfs"],
+            "help": "Log first step before training",
+        },
+    )
+    checkpoint: Path = field(
+        default=None,
+        metadata={
+            "aliases": ["-ckpt"],
+            "help": "Path to checkpoint",
+        },
+    )
+    save_steps: int = field(
+        default=int(1e4),
+        metadata={
+            "help": "Save steps",
+        },
+    )
+    save_strategy: str = field(
+        default="steps",
+        metadata={
+            "aliases": ["-ss"],
+            "choices": ["no", "epoch", "steps"],
+            "help": "Save strategy",
+        },
+    )
+    seed: int = field(
+        default=42,
+        metadata={
+            "aliases": ["-s"],
+            "help": "Random seed",
+        },
+    )
+    wandb: bool = field(
+        default=False,
+        metadata={
+            "help": "Use wandb for logging",
+        },
+    )
+    wandb_project: str = field(
+        default=None,
+        metadata={
+            "aliases": ["-wp"],
+            "help": "Wandb project name",
+        },
+    )
+    tqdm: bool = field(
+        default=True,
+        metadata={
+            "help": "Disable tqdm progress bar",
+        },
+    )
+    device: torch.device = field(
+        default=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
+        metadata={
+            "help": "PyTorch Device",
+        },
+    )
+    fp16: bool = field(
+        default=False,
+        metadata={
+            "help": "Use mixed precision training",
+        },
+    )
+    bf16: bool = field(
+        default=False,
+        metadata={
+            "help": "Use mixed precision training",
+        },
+    )
+    output_path: Path = field(
+        default=Path("checkpoints"),
+        metadata={
+            "aliases": ["-op"],
+            "help": "Output path",
+        },
+    )
 
-    def configure(self) -> None:
-        self.add_argument("-opt", "--optimizer")
-        self.add_argument("-lr", "--learning_rate")
-        self.add_argument("-b1", "--adam_beta1")
-        self.add_argument("-b2", "--adam_beta2")
-        self.add_argument("-wd", "--weight_decay")
-        self.add_argument("-b", "--train_batch_size")
-        self.add_argument("-eb", "--eval_batch_size")
-        self.add_argument("-e", "--epochs")
-        self.add_argument("-T", "--max_iter")
-        self.add_argument("-nw", "--num_workers")
-        self.add_argument("-lf", "--log_freq")
-        self.add_argument("-lfs", "--log_first_step")
-        self.add_argument("-ckpt", "--checkpoint")
-        self.add_argument("-s", "--seed")
-        self.add_argument("-wp", "--wandb_project")
-        self.add_argument("-op", "--output_path")
-
-    def process_args(self) -> None:
+    def __post_init__(self):
         if self.bf16:
             self.dtype = torch.bfloat16
         elif self.fp16:
             self.dtype = torch.float16
         else:
             self.dtype = torch.float32
+
+
+if __name__ == "__main__":
+    args: GraBArgs
+    train_args: TrainArgs
+    (args, train_args) = HfArgumentParser(
+        (GraBArgs, TrainArgs)
+    ).parse_args_into_dataclasses()
+
+    print(args)
+    print(train_args.device)
+    print(type(train_args.device))

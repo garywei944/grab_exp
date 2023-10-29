@@ -11,16 +11,16 @@ import wandb
 from tqdm import tqdm, trange
 from absl import logging
 from tabulate import tabulate
-from typing import Literal
 
 import torch
 from torch import nn, Tensor
 from torch.utils.data import Dataset, Subset, DataLoader
 from torchvision import datasets, transforms
-from transformers import set_seed
+from transformers import set_seed, HfArgumentParser
+from dataclasses import dataclass, field
 
 import torchopt
-from torch.func import grad, grad_and_value, vmap, functional_call
+from torch.func import grad_and_value, vmap, functional_call
 from torchopt.typing import GradientTransformation
 
 from grabsampler import GraBSampler, BalanceType
@@ -31,57 +31,76 @@ from cd2root import cd2root
 cd2root()
 
 from experiments.utils.func_helpers import make_func_params
-from experiments.utils.arguments import GraBArguments, TrainArgs
+from experiments.utils.arguments import GraBArgs, TrainArgs
 
 DATASETS = ["mnist", "fashion_mnist", "cifar10", "cifar100"]
 MODELS = ["lr", "lenet", "resnet", "minnet"]
 
 
-class Args(GraBArguments, TrainArgs):
-    dataset_name: Literal[tuple(DATASETS)] = "mnist"  # Which dataset to use
-    model_name: Literal[tuple(MODELS)] = "lr"  # Which model to use
-    num_train_examples: int = None  # Number of samples to use for training
-    num_test_examples: int = None  # Number of samples to use for testing
-    resnet_depth: int = 8  # Depth of ResNet
-
-    def configure(self) -> None:
-        GraBArguments.configure(self)
-        TrainArgs.configure(self)
-
-        self.add_argument("-d", "--dataset_name")
-        self.add_argument("-model", "--model_name")
-        self.add_argument("-ntr", "--num_train_examples")
-        self.add_argument("-nte", "--num_test_examples")
-
-    def process_args(self) -> None:
-        GraBArguments.process_args(self)
-        TrainArgs.process_args(self)
-
-
-def get_exp_id(args: Args):
-    # Unique experiment name for checkpoints
-    exp_id = (
-        f"{args.dataset_name}_{args.model_name}_{args.balance_type}"
-        f"_{args.optimizer}_lr_{args.learning_rate}"
-        f"_wd_{args.weight_decay}"
-        f"_b_{args.train_batch_size}_seed_{args.seed}"
+@dataclass
+class Args:
+    dataset_name: str = field(
+        default="mnist",
+        metadata={
+            "aliases": ["-d"],
+            "help": "Which dataset to use",
+            "choices": DATASETS,
+        },
+    )
+    model_name: str = field(
+        default="lr",
+        metadata={
+            "aliases": ["-model"],
+            "help": "Which model to use",
+            "choices": MODELS,
+        },
+    )
+    num_train_examples: int = field(
+        default=None,
+        metadata={
+            "aliases": ["-ntr"],
+            "help": "Number of samples to use for training",
+        },
+    )
+    num_test_examples: int = field(
+        default=None,
+        metadata={
+            "aliases": ["-nte"],
+            "help": "Number of samples to use for testing",
+        },
+    )
+    resnet_depth: int = field(
+        default=8,
+        metadata={
+            "help": "Depth of ResNet",
+        },
     )
 
-    if args.normalize_grad:
+
+def get_exp_id(args: Args, grab_args: GraBArgs, train_args: TrainArgs) -> str:
+    # Unique experiment name for checkpoints
+    exp_id = (
+        f"{args.dataset_name}_{args.model_name}_{grab_args.balance_type}"
+        f"_{train_args.optimizer}_lr_{train_args.learning_rate}"
+        f"_wd_{train_args.weight_decay}"
+        f"_b_{train_args.train_batch_size}_seed_{train_args.seed}"
+    )
+
+    if grab_args.normalize_grad:
         exp_id += "_norm"
-    if args.random_projection:
-        exp_id += f"_pi_{args.random_projection_eps}"
-    if args.prob_balance:
-        exp_id += f"_prob_{args.prob_balance_c:.1f}"
-    if args.balance_type in [
+    if grab_args.random_projection:
+        exp_id += f"_pi_{grab_args.random_projection_eps}"
+    if grab_args.prob_balance:
+        exp_id += f"_prob_{grab_args.prob_balance_c:.1f}"
+    if grab_args.balance_type in [
         BalanceType.RECURSIVE_BALANCE,
         BalanceType.RECURSIVE_PAIR_BALANCE,
     ]:
-        exp_id += f"_depth_{args.depth}"
-    if not args.random_first_epoch:
+        exp_id += f"_depth_{grab_args.depth}"
+    if not grab_args.random_first_epoch:
         exp_id += "_no_rr"
-    if args.balance_type == BalanceType.EMA_BALANCE:
-        exp_id += f"_ema_{args.ema_decay}"
+    if grab_args.balance_type == BalanceType.EMA_BALANCE:
+        exp_id += f"_ema_{grab_args.ema_decay}"
 
     return exp_id
 
@@ -188,14 +207,14 @@ def get_dataset(args: Args) -> tuple[Dataset, Dataset, int, int]:
 
 
 def get_model(
-    args: Args, in_dim: int, num_classes: int
+    args: Args, train_args: TrainArgs, in_dim: int, num_classes: int
 ) -> tuple[nn.Module, dict[str, nn.Parameter], dict[str, Tensor], nn.Module]:
-    device = args.device
+    device = train_args.device
 
     # Load the model
     # enforce that the same seed use the same model initialization
-    if args.seed is not None:
-        set_seed(args.seed)
+    if train_args.seed is not None:
+        set_seed(train_args.seed)
     if args.model_name == "lr":
         assert args.dataset_name in ["mnist", "fashion_mnist"]
 
@@ -228,19 +247,19 @@ def get_model(
     return model, params, buffers, loss_fn
 
 
-def get_optimizer(args: Args) -> GradientTransformation:
+def get_optimizer(train_args: TrainArgs) -> GradientTransformation:
     # Initiate optimizer
-    if args.optimizer == "sgd":
+    if train_args.optimizer == "sgd":
         optimizer = torchopt.sgd(
-            args.learning_rate,
-            momentum=args.adam_beta1,
-            weight_decay=args.weight_decay,
+            train_args.learning_rate,
+            momentum=train_args.adam_beta1,
+            weight_decay=train_args.weight_decay,
         )
-    elif args.optimizer in ["adam", "adamw"]:
+    elif train_args.optimizer in ["adam", "adamw"]:
         optimizer = torchopt.adamw(
-            args.learning_rate,
-            betas=(args.adam_beta1, args.adam_beta2),
-            weight_decay=args.weight_decay,
+            train_args.learning_rate,
+            betas=(train_args.adam_beta1, train_args.adam_beta2),
+            weight_decay=train_args.weight_decay,
             use_accelerated_op=True,
         )
     else:
@@ -327,36 +346,49 @@ def validate(
 
 
 def main():
-    args = Args().parse_args()
+    args: Args
+    grab_args: GraBArgs
+    train_args: TrainArgs
+    args, grab_args, train_args = HfArgumentParser(
+        (Args, GraBArgs, TrainArgs)
+    ).parse_args_into_dataclasses()
 
     # Init wandb
+    config = {
+        **vars(args),
+        **vars(grab_args),
+        **vars(train_args),
+    }
     wandb.init(
         project=f"grab-{args.dataset_name}"
-        if args.wandb_project is None
-        else args.wandb_project,
+        if train_args.wandb_project is None
+        else train_args.wandb_project,
         entity="grab",
-        mode="online" if args.wandb else "offline",
-        config=args.as_dict(),
+        mode="online" if train_args.wandb else "offline",
+        config=config,
     )
 
     # Set up exp_id and checkpoint path
-    exp_id = get_exp_id(args)
+    exp_id = get_exp_id(args, grab_args, train_args)
     checkpoint_path = (
-        args.output_path / args.dataset_name / args.model_name / str(args.balance_type)
+        train_args.output_path
+        / args.dataset_name
+        / args.model_name
+        / str(grab_args.balance_type)
     )
     checkpoint_path.mkdir(parents=True, exist_ok=True)
 
     # Set up device, dtype, seed, logging, and timer
-    device = args.device
-    dtype = args.dtype
-    if args.seed is not None:
-        set_seed(args.seed)
+    device = train_args.device
+    if train_args.seed is not None:
+        set_seed(train_args.seed)
     logging.set_verbosity(logging.INFO)
     timer = EventTimer(device=device)
 
     # Set dtype, only used for the sampler
     logging.info(f"Experiment ID: {exp_id}")
-    print(tabulate(sorted(list(args.as_dict().items()))))
+    # print(tabulate(sorted(list(config.items()))))
+    print(tabulate(config.items()))
 
     # Load dataset
     train_dataset, test_dataset, in_dim, num_classes = get_dataset(args)
@@ -367,10 +399,10 @@ def main():
     val_metric = evaluate.load("accuracy")
 
     # Initiate model
-    model, params, buffers, loss_fn = get_model(args, in_dim, num_classes)
+    model, params, buffers, loss_fn = get_model(args, train_args, in_dim, num_classes)
 
     # Initiate optimizer
-    optimizer = get_optimizer(args)
+    optimizer = get_optimizer(train_args)
     opt_state = optimizer.init(params)
 
     # Initiate sampler
@@ -380,8 +412,8 @@ def main():
 
     # Load orders for FixedOrdering
     orders = None
-    if args.order_path is not None:
-        orders = torch.load(args.order_path)
+    if grab_args.order_path is not None:
+        orders = torch.load(grab_args.order_path)
         if len(orders.shape) == 2:
             orders = orders[-1].tolist()
         else:
@@ -394,10 +426,10 @@ def main():
         orders=orders,
         # Other specific
         timer=timer,
-        record_herding=args.report_grads,
+        record_herding=grab_args.report_grads,
         stale_mean_herding=False,
-        cuda_herding=not args.cpu_herding,
-        record_norm=args.report_grads,
+        cuda_herding=not grab_args.cpu_herding,
+        record_norm=grab_args.report_grads,
         # For NTK
         model=model,
         params=params,
@@ -405,29 +437,29 @@ def main():
         loss_fn=loss_fn,
         dataset=train_dataset,
         kernel_dtype=torch.float32,
-        **args.as_dict(),
+        **config,
     )
 
     # Initiate data loaders
     train_loader = DataLoader(
         dataset=train_dataset,
-        batch_size=args.train_batch_size,
+        batch_size=train_args.train_batch_size,
         sampler=sampler,
         persistent_workers=False,
-        num_workers=args.num_workers,
+        num_workers=train_args.num_workers,
     )
     train_eval_loader = DataLoader(
         dataset=train_dataset,
-        batch_size=args.eval_batch_size,
+        batch_size=train_args.eval_batch_size,
         persistent_workers=False,
-        num_workers=args.num_workers,
+        num_workers=train_args.num_workers,
     )
 
     test_loader = DataLoader(
         dataset=test_dataset,
-        batch_size=args.eval_batch_size,
+        batch_size=train_args.eval_batch_size,
         persistent_workers=False,
-        num_workers=args.num_workers,
+        num_workers=train_args.num_workers,
     )
 
     ft_compute_sample_grad_and_loss = vmap(
@@ -441,11 +473,11 @@ def main():
 
     # Train
     pbar = trange(
-        len(train_loader) * args.epochs,
+        len(train_loader) * train_args.epochs,
         leave=False,
-        disable=not args.tqdm,
+        disable=not train_args.tqdm,
     )
-    for epoch in range(args.epochs + 1):
+    for epoch in range(train_args.epochs + 1):
         logs = {}
 
         if epoch != 0:
@@ -471,7 +503,7 @@ def main():
                 }
             )
 
-            if args.report_grads:
+            if grab_args.report_grads:
                 grad_norms = sampler.sorter.grad_norms
 
                 # Save the norms
@@ -499,7 +531,7 @@ def main():
                 model=model,
                 loss_fn=loss_fn,
                 metric=train_eval_metric,
-                no_tqdm=not args.tqdm,
+                no_tqdm=not train_args.tqdm,
                 device=device,
             )
             # perform validation (single loop over the validation dataloader)
@@ -508,7 +540,7 @@ def main():
                 model=model,
                 loss_fn=loss_fn,
                 metric=val_metric,
-                no_tqdm=not args.tqdm,
+                no_tqdm=not train_args.tqdm,
                 device=device,
             )
 
@@ -546,7 +578,7 @@ def main():
                 f'train: {pretty_time(timer["train"][-1])} '
                 f'val: {pretty_time(timer["val"][-1])}'
             )
-            if args.report_grads:
+            if grab_args.report_grads:
                 log_msg += (
                     f" | norm_mean: {norm_mean:.2f} "
                     f"norm_std: {norm_std:.2f} "
@@ -557,27 +589,28 @@ def main():
             tqdm.write(log_msg)
 
         # save checkpoint
-        if args.save_strategy == "epoch":
+        if train_args.save_strategy == "epoch":
             checkpoint_name = exp_id + f"_epoch_{epoch}.pt"
             torch.save(model.state_dict(), checkpoint_path / checkpoint_name)
 
         if epoch > 0:
-            if args.report_grads:
+            if grab_args.report_grads:
                 # Save the grad norms
                 df_grad_norms.describe().to_csv(
-                    checkpoint_path / f"{exp_id}_{args.epochs}_grad_norms_proc.csv"
+                    checkpoint_path
+                    / f"{exp_id}_{train_args.epochs}_grad_norms_proc.csv"
                 )
             # Save the timer
-            timer.save(checkpoint_path / f"{exp_id}_{args.epochs}_timer_proc.pt")
+            timer.save(checkpoint_path / f"{exp_id}_{train_args.epochs}_timer_proc.pt")
             timer.summary().to_csv(
-                checkpoint_path / f"{exp_id}_{args.epochs}_timer_proc.csv"
+                checkpoint_path / f"{exp_id}_{train_args.epochs}_timer_proc.csv"
             )
 
         # Save the orders
-        if args.record_orders:
+        if grab_args.record_orders:
             torch.save(
                 torch.tensor(sampler.orders_history),
-                checkpoint_path / f"{exp_id}_{args.epochs}_orders_proc.pt",
+                checkpoint_path / f"{exp_id}_{train_args.epochs}_orders_proc.pt",
             )
 
         # Log to wandb
@@ -586,7 +619,7 @@ def main():
     pbar.close()
     print(torch.cuda.memory_summary())
 
-    if args.report_grads:
+    if grab_args.report_grads:
         print("-" * 50)
         print(df_grad_norms.describe())
 
@@ -606,19 +639,19 @@ def main():
     wandb.finish()
 
     # Save the timer
-    timer.save(checkpoint_path / f"{exp_id}_{args.epochs}_timer.pt")
-    timer.summary().to_csv(checkpoint_path / f"{exp_id}_{args.epochs}_timer.csv")
-    if args.report_grads:
+    timer.save(checkpoint_path / f"{exp_id}_{train_args.epochs}_timer.pt")
+    timer.summary().to_csv(checkpoint_path / f"{exp_id}_{train_args.epochs}_timer.csv")
+    if grab_args.report_grads:
         # Save the grad norms
         df_grad_norms.describe().to_csv(
-            checkpoint_path / f"{exp_id}_{args.epochs}_grad_norms.csv"
+            checkpoint_path / f"{exp_id}_{train_args.epochs}_grad_norms.csv"
         )
 
-    if args.record_orders:
+    if grab_args.record_orders:
         # Save the orders
         torch.save(
             torch.tensor(sampler.orders_history),
-            checkpoint_path / f"{exp_id}_{args.epochs}_orders.pt",
+            checkpoint_path / f"{exp_id}_{train_args.epochs}_orders.pt",
         )
 
 
