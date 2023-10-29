@@ -59,7 +59,7 @@ class TrainArgs(Tap):
     adam_beta1: float = 0.9  # Adam beta1 / momentum
     adam_beta2: float = 0.999  # Adam beta2
     weight_decay: float = 0.01  # Weight decay
-    batch_size: int = 16  # Batch size
+    train_batch_size: int = 16  # Batch size
     eval_batch_size: int = 64  # Evaluation batch size
     epochs: int = 100  # Number of epochs
     max_iter: int = int(1e6)  # Maximum number of iterations
@@ -86,7 +86,7 @@ class TrainArgs(Tap):
         self.add_argument("-b1", "--adam_beta1")
         self.add_argument("-b2", "--adam_beta2")
         self.add_argument("-wd", "--weight_decay")
-        self.add_argument("-b", "--batch_size")
+        self.add_argument("-b", "--train_batch_size")
         self.add_argument("-eb", "--eval_batch_size")
         self.add_argument("-e", "--epochs")
         self.add_argument("-T", "--max_iter")

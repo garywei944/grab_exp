@@ -28,6 +28,6 @@ class LeNet(nn.Module):
 
     def forward(self, x):
         x = self.conv(x)
-        x = x.view(-1, 120).squeeze()
+        x = x.view(-1, 120)
         x = self.fc(x)
         return x
