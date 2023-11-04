@@ -36,6 +36,9 @@ class MeanBalance(SorterBase):
         self.acc.zero_()
         self.miu.reset()
 
+        print(self.orders[:128])
+        print(self.orders[-128:])
+
     @torch.no_grad()
     @overrides
     def single_step(self, grad: Tensor, repeat: int = 1, *args, **kwargs):

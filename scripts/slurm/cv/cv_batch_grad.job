@@ -9,7 +9,7 @@
 #SBATCH --partition=gpu,desa                     # Request partition
 #SBATCH --gres=gpu:1                  # Type/number of GPUs needed
 
-CMD="python experiments/cv/cv_torch.py \
+CMD="python experiments/cv/cv_batch_grad.py \
 -nw 1 \
 --wandb \
 --tqdm 0 \

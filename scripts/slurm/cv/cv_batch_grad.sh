@@ -9,7 +9,7 @@ for seed in 1 2 3 4 5; do
   for lr in 0.1; do
     for wd in 0.0001; do
       for balance in mean; do
-        sbatch -J $DATASET scripts/slurm/cv/cv_torch.job \
+        sbatch -J $DATASET scripts/slurm/cv/cv_batch_grad.job \
           -d $DATASET \
           -model lr \
           -bt $balance \
