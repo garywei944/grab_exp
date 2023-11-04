@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# MNIST best lr sgd 0.01 wd 0.01 momentum 0
+# MNIST best lr sgd 0.1 wd 0.01 momentum 0
 
 DATASET=mnist
 mkdir -p logs/$DATASET
@@ -8,8 +8,8 @@ mkdir -p logs/$DATASET
 for seed in 1 2 3 4 5; do
   for lr in 0.1; do
     for wd in 0.0001; do
-      for balance in rr mean; do
-        sbatch -J $DATASET scripts/slurm/cv/cv.job \
+      for balance in mean; do
+        sbatch -J $DATASET scripts/slurm/cv/cv_torch.job \
           -d $DATASET \
           -model lr \
           -bt $balance \
@@ -31,6 +31,7 @@ for seed in 1 2 3 4 5; do
 done
 
 # # CIFAR10 best lr sgd 0.01 wd 0.01 momentum 0
+# CIFAR 10 best lr adamw 0.001 wd 0.01
 
 # DATASET=cifar10
 # mkdir -p logs/$DATASET
