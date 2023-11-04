@@ -17,14 +17,13 @@ from torch import nn, Tensor
 from torch.utils.data import DataLoader, Sampler
 from transformers import set_seed, HfArgumentParser
 
-from grabsampler import GraBSampler, BalanceType
-from grabsampler.utils import EventTimer, pretty_time
+from grabsampler.utils import EventTimer, pretty_time, StaleMeanEstimator
 
 from cd2root import cd2root
 
 cd2root()
 
-from experiments.cv.cv import Args, get_exp_id, get_dataset, get_model
+from experiments.cv.cv import Args, get_exp_id, get_dataset
 
 from experiments.utils.arguments import GraBArgs, TrainArgs
 
@@ -52,6 +51,38 @@ class RBGSampler(Sampler):
         self.left = self.n
         self.right = self.n - 1
 
+    # # pair balance not working well
+    # def step(
+    #     self,
+    #     grads1: dict[str, Tensor],
+    #     grads2: dict[str, Tensor],
+    #     indices: Tensor,
+    # ):
+    #     b = indices.shape[1]
+    #     grad1 = torch.cat([grads1[k].flatten() for k in grads1])
+    #     grad2 = torch.cat([grads2[k].flatten() for k in grads2])
+    #
+    #     diff = grad1 - grad2
+    #     if torch.inner(diff, self.acc) < 0:
+    #         self.next_orders[self.left : self.left + b].copy_(
+    #             self.orders[indices[0] + self.idx]
+    #         )
+    #         self.next_orders[self.right - b + 1 : self.right + 1].copy_(
+    #             self.orders[indices[1] + self.idx]
+    #         )
+    #         self.acc.add_(diff)
+    #     else:
+    #         self.next_orders[self.right - b + 1 : self.right + 1].copy_(
+    #             self.orders[indices[0] + self.idx]
+    #         )
+    #         self.next_orders[self.left : self.left + b].copy_(
+    #             self.orders[indices[1] + self.idx]
+    #         )
+    #         self.acc.sub_(diff)
+    #     self.left += b
+    #     self.right -= b
+    #     self.idx += b * 2
+
     def step(
         self,
         grads1: dict[str, Tensor],
@@ -61,26 +92,21 @@ class RBGSampler(Sampler):
         b = indices.shape[1]
         grad1 = torch.cat([grads1[k].flatten() for k in grads1])
         grad2 = torch.cat([grads2[k].flatten() for k in grads2])
+        grads = [grad1, grad2]
 
-        diff = grad1 - grad2
-        if torch.inner(diff, self.acc) < 0:
-            self.next_orders[self.left : self.left + b].copy_(
-                self.orders[indices[0] + self.idx]
-            )
-            self.next_orders[self.right - b + 1 : self.right + 1].copy_(
-                self.orders[indices[1] + self.idx]
-            )
-            self.acc.add_(diff)
-        else:
-            self.next_orders[self.right - b + 1 : self.right + 1].copy_(
-                self.orders[indices[0] + self.idx]
-            )
-            self.next_orders[self.left : self.left + b].copy_(
-                self.orders[indices[1] + self.idx]
-            )
-            self.acc.sub_(diff)
-        self.left += b
-        self.right -= b
+        for i in range(2):
+            if torch.inner(grads[i], self.acc) < 0:
+                self.next_orders[self.left : self.left + b].copy_(
+                    self.orders[indices[i] + self.idx]
+                )
+                self.acc.add_(grads[i])
+                self.left += b
+            else:
+                self.next_orders[self.right - b + 1 : self.right + 1].copy_(
+                    self.orders[indices[i] + self.idx]
+                )
+                self.acc.sub_(grads[i])
+                self.right -= b
         self.idx += b * 2
 
     def reset(self):
