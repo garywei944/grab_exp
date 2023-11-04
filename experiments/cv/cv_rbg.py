@@ -96,8 +96,8 @@ class RBGSampler(Sampler):
 
         self.acc.zero_()
 
-        print(self.orders[:128])
-        print(self.orders[-128:])
+        # print(self.orders[:128])
+        # print(self.orders[-128:])
 
     def __len__(self):
         return self.n
