@@ -14,10 +14,7 @@ cmd="python -u experiments/cv/cv.py \
   --weight_decay 0.01 \
   --per_device_train_batch_size 64 \
   --per_device_eval_batch_size 1024 \
-  --resnet_depth 2 \
-  --centered_feature_map \
-  --cpu_herding \
-  --random_projection none"
+  --cpu_herding"
 #  --record_grads 1 \
 
 echo $cmd

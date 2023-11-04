@@ -38,7 +38,7 @@ class GraBSampler(Sampler[list[int]]):
 
     def __init__(
         self,
-        data_source: Sized,
+        data_source: IterableDataset,
         trainable_params: dict[str, Tensor],
         balance_type: str | BalanceType = BalanceType.MEAN_BALANCE,
         device: (str | torch.device) = torch.device(

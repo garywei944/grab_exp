@@ -169,7 +169,9 @@ class SorterBase(ABC):
         self, grads: Tensor, b: int, batch_gradient_size: int = 1, *args, **kwargs
     ):
         if batch_gradient_size != 1:
-            self.single_step(grads, repeat=b, *args, **kwargs)
+            self.single_step(
+                grads.view(-1), repeat=batch_gradient_size, *args, **kwargs
+            )
         else:
             for i in range(b):
                 self.single_step(grads[i], *args, **kwargs)

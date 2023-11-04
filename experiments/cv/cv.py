@@ -252,7 +252,7 @@ def get_optimizer(train_args: TrainArgs) -> GradientTransformation:
     if train_args.optimizer == "sgd":
         optimizer = torchopt.sgd(
             train_args.learning_rate,
-            momentum=train_args.adam_beta1,
+            momentum=train_args.momentum,
             weight_decay=train_args.weight_decay,
         )
     elif train_args.optimizer in ["adam", "adamw"]:

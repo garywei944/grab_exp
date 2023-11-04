@@ -16,8 +16,9 @@ for seed in 42; do
           --seed $seed \
           --random_first_epoch 1 \
           --epochs 100 \
-          -opt adamw \
+          -opt sgd \
           -lr $lr \
+          -m 0 \
           -wd $wd \
           -b 64 \
           -eb 1024 \
@@ -28,7 +29,6 @@ for seed in 42; do
     done
   done
 done
-
 
 # # CIFAR10 best lr sgd 0.01 wd 0.01 momentum 0
 

@@ -108,6 +108,13 @@ class TrainArgs:
             "help": "Learning rate",
         },
     )
+    momentum: float = field(
+        default=0,
+        metadata={
+            "aliases": ["-m"],
+            "help": "Momentum",
+        },
+    )
     adam_beta1: float = field(
         default=0.9,
         metadata={

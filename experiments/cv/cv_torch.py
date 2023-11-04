@@ -36,7 +36,7 @@ def get_optimizer(train_args: TrainArgs, model: nn.Module) -> torch.optim.Optimi
         optimizer = torch.optim.SGD(
             model.parameters(),
             lr=train_args.learning_rate,
-            momentum=train_args.adam_beta1,
+            momentum=train_args.momentum,
             weight_decay=train_args.weight_decay,
         )
     elif train_args.optimizer in ["adam", "adamw"]:
@@ -62,11 +62,12 @@ def train(
     pbar: tqdm,
     device: torch.device = torch.device("cuda"),
 ):
+    model.train()
     running_loss, n = 0, 0
     for x, y in train_loader:
         x = x.to(device)
         y = y.to(device)
-        b = len(x)
+        b = x.shape[0]
         n += b
 
         logits = model(x)
@@ -98,6 +99,7 @@ def validate(
     no_tqdm: bool = False,
     device: torch.device = torch.device("cuda"),
 ):
+    model.eval()
     running_loss, n = 0, 0
     # look over the validation dataloader
     for x, y in tqdm(test_loader, leave=False, disable=no_tqdm):
@@ -242,7 +244,7 @@ def main():
         leave=False,
         disable=not train_args.tqdm,
     )
-    for epoch in range(train_args.epochs + 1):
+    for epoch in range(0 if train_args.log_first_step else 1, train_args.epochs + 1):
         logs = {
             "epoch": epoch,
             "iteration": epoch * len(train_loader),
