@@ -127,7 +127,7 @@ def main():
         **vars(grab_args),
         **vars(train_args),
     }
-    config['grad_balance'] = True
+    config['batch_grad'] = True
     wandb.init(
         project=f"grab-{args.dataset_name}"
         if train_args.wandb_project is None
