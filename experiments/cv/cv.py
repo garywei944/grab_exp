@@ -359,7 +359,7 @@ def main():
         **vars(grab_args),
         **vars(train_args),
     }
-    config['batch_grad'] = False
+    config["batch_grad"] = False
     wandb.init(
         project=f"grab-{args.dataset_name}"
         if train_args.wandb_project is None
@@ -423,6 +423,7 @@ def main():
     sampler = GraBSampler(
         train_dataset,
         params,
+        batch_size=train_args.train_batch_size,
         # Probabilistic balance
         orders=orders,
         # Other specific

@@ -1,3 +1,9 @@
 {
-    "python.analysis.autoImportCompletions": true
+    "python.analysis.autoImportCompletions": true,
+    "files.watcherExclude": {
+        "**/checkpoints/**": true,
+        "**/data/**": true,
+        "**/logs/**": true,
+        "**/wandb/**": true
+    }
 }
