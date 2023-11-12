@@ -46,6 +46,9 @@ class RBGSampler(Sampler):
         self.next_orders: Tensor = self.orders.clone()
 
         self.acc = torch.zeros(d, dtype=torch.float32, device=torch.device("cuda"))
+        self.mean = StaleMeanEstimator(
+            d, dtype=torch.float32, device=torch.device("cuda")
+        )
 
         self.idx = self.n
         self.left = self.n
@@ -92,6 +95,8 @@ class RBGSampler(Sampler):
         b = indices.shape[1]
         grad1 = torch.cat([grads1[k].flatten() for k in grads1])
         grad2 = torch.cat([grads2[k].flatten() for k in grads2])
+        grad1 = grad1 - self.mean(grad1)
+        grad2 = grad2 - self.mean(grad2)
         grads = [grad1, grad2]
 
         for i in range(2):
@@ -121,6 +126,7 @@ class RBGSampler(Sampler):
         self.right = self.n - 1
 
         self.acc.zero_()
+        self.mean.reset()
 
         # print(self.orders[:128])
         # print(self.orders[-128:])
