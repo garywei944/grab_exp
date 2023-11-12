@@ -14,6 +14,7 @@ from tabulate import tabulate
 
 import torch
 from torch import nn, Tensor
+import torch.nn.functional as F
 from torch.utils.data import Dataset, Subset, DataLoader, Sampler
 from torchvision import datasets, transforms
 from transformers import set_seed, HfArgumentParser
@@ -24,7 +25,7 @@ from torch.func import grad_and_value, vmap, functional_call
 from torchopt.typing import GradientTransformation
 
 from grabsampler import GraBSampler, BalanceType
-from grabsampler.utils import EventTimer, pretty_time
+from grabsampler.utils import EventTimer, pretty_time, StaleMeanEstimator
 
 from cd2root import cd2root
 
@@ -37,7 +38,7 @@ DATASETS = ["mnist", "fashion_mnist", "cifar10", "cifar100"]
 MODELS = ["lr", "lenet", "resnet", "minnet"]
 
 
-class RBGSampler(Sampler):
+class DESampler(Sampler):
     orders: Tensor
     next_orders: Tensor
     acc: Tensor
@@ -56,6 +57,11 @@ class RBGSampler(Sampler):
         self.idx = self.n
         self.left = self.n
         self.right = self.n - 1
+
+        # used to compute pair_grads efficiently
+        self.filter = torch.tensor([1, -1], dtype=torch.float32, device="cuda").view(
+            1, 1, 2, 1
+        )
 
     # # pair balance not working well
     # def step(
@@ -89,9 +95,61 @@ class RBGSampler(Sampler):
     #     self.right -= b
     #     self.idx += b * 2
 
-    def compute_sings(self, grads: dict[str, Tensor], b: int):
-        grads = torch.cat([v.reshape(b, -1) for k, v in grads.items()])
-        grads = grads -
+    def compute_sings(self, grads: dict[str, Tensor]):
+        b = next(iter(grads.values())).shape[0]
+
+        assert b % 2 == 0
+        acc = self.acc.clone()
+
+        grads = torch.cat([v.reshape(b, -1) for k, v in grads.items()], dim=1)
+
+        pair_grad = F.conv2d(grads.view(1, 1, b, -1), self.filter, stride=(2, 1)).view(
+            b // 2, -1
+        )
+
+        signs = []
+
+        for i in range(b // 2):
+            if torch.inner(pair_grad[i], acc) < 0:
+                signs.append(True)
+                acc.add_(pair_grad[i])
+            else:
+                signs.append(False)
+                acc.sub_(pair_grad[i])
+
+        return signs
+
+    def step(
+        self,
+        grads: dict[str, Tensor],
+        signs: list[bool],
+    ):
+        b = next(iter(grads.values())).shape[0]
+
+        assert b % 2 == 0
+        assert len(signs) == b // 2
+
+        grads = torch.cat([v.reshape(b, -1) for k, v in grads.items()], dim=1)
+
+        pair_grad = F.conv2d(grads.view(1, 1, b, -1), self.filter, stride=(2, 1)).view(
+            b // 2, -1
+        )
+
+        for i, sign in enumerate(signs):
+            if sign:
+                self.next_orders[self.left] = self.orders[self.idx]
+                self.idx += 1
+                self.next_orders[self.right] = self.orders[self.idx]
+                self.acc += pair_grad[i]
+            else:
+                self.next_orders[self.right] = self.orders[self.idx]
+                self.idx += 1
+                self.next_orders[self.left] = self.orders[self.idx]
+                self.acc -= pair_grad[i]
+
+            self.idx += 1
+            self.left += 1
+            self.right -= 1
 
     def reset(self):
         assert self.left > self.right
@@ -366,7 +424,7 @@ def compute_loss(
 @torch.no_grad()
 def train(
     train_loader: DataLoader,
-    sampler: GraBSampler,
+    sampler: DESampler,
     params: dict[str, nn.Parameter],
     buffers: dict[str, Tensor],
     ft_compute_sample_grad_and_loss: callable,
@@ -376,6 +434,7 @@ def train(
     pbar: tqdm,
     device: torch.device = torch.device("cuda"),
 ):
+    sampler.reset()
     running_loss, n = 0, 0
     for x, y in train_loader:
         x = x.to(device)
@@ -386,7 +445,8 @@ def train(
             params, buffers, x, y
         )
 
-        sampler.step(ft_per_sample_grads)
+        # Gary: First compute signs of grads
+        signs = sampler.compute_sings(ft_per_sample_grads)
 
         grads = {k: g.mean(dim=0) for k, g in ft_per_sample_grads.items()}
         updates, opt_state = optimizer.update(
@@ -402,6 +462,9 @@ def train(
         ft_per_sample_grads, (batch_loss, logits) = ft_compute_sample_grad_and_loss(
             params, buffers, x, y
         )
+
+        # Then update acc and orders according to the signs
+        sampler.step(ft_per_sample_grads, signs)
 
         grads = {k: g.mean(dim=0) for k, g in ft_per_sample_grads.items()}
         updates, opt_state = optimizer.update(
@@ -450,7 +513,7 @@ def main():
     ).parse_args_into_dataclasses()
 
     # Init wandb
-    config = {**vars(args), **vars(grab_args), **vars(train_args), "batch_grad": False}
+    config = {**vars(args), **vars(grab_args), **vars(train_args), "exp": "data_echo"}
     wandb.init(
         project=f"grab-{args.dataset_name}"
         if train_args.wandb_project is None
@@ -511,32 +574,38 @@ def main():
         else:
             orders = orders.tolist()
 
-    sampler = GraBSampler(
-        train_dataset,
-        params,
-        # Probabilistic balance
-        orders=orders,
-        # Other specific
-        timer=timer,
-        record_herding=grab_args.report_grads,
-        stale_mean_herding=False,
-        cuda_herding=not grab_args.cpu_herding,
-        record_norm=grab_args.report_grads,
-        # For NTK
-        model=model,
-        params=params,
-        buffers=buffers,
-        loss_fn=loss_fn,
-        dataset=train_dataset,
-        kernel_dtype=torch.float32,
-        **config,
+    # sampler = GraBSampler(
+    #     train_dataset,
+    #     params,
+    #     # Probabilistic balance
+    #     orders=orders,
+    #     # Other specific
+    #     timer=timer,
+    #     record_herding=grab_args.report_grads,
+    #     stale_mean_herding=False,
+    #     cuda_herding=not grab_args.cpu_herding,
+    #     record_norm=grab_args.report_grads,
+    #     # For NTK
+    #     model=model,
+    #     params=params,
+    #     buffers=buffers,
+    #     loss_fn=loss_fn,
+    #     dataset=train_dataset,
+    #     kernel_dtype=torch.float32,
+    #     **config,
+    # )
+    sampler = DESampler(
+        len(train_dataset),
+        d,
     )
 
     # Initiate data loaders
     train_loader = DataLoader(
         dataset=train_dataset,
         batch_size=train_args.train_batch_size,
-        sampler=sampler,
+        sampler=None
+        if grab_args.balance_type == BalanceType.RANDOM_RESHUFFLING
+        else sampler,
         persistent_workers=False,
         num_workers=train_args.num_workers,
     )
@@ -565,7 +634,7 @@ def main():
 
     # Train
     pbar = trange(
-        len(train_loader) * train_args.epochs,
+        len(train_loader) * train_args.epochs // 2,
         leave=False,
         disable=not train_args.tqdm,
     )
