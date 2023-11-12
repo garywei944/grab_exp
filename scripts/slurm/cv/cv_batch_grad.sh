@@ -50,7 +50,7 @@ for seed in 1 2 3 4 5; do
           -lr $lr \
           -wd $wd \
           -m 0 \
-          -b 16 \
+          -b 64 \
           -eb 1024 \
           --report_grads 0 \
           --cpu_herding \

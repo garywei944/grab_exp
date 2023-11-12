@@ -203,6 +203,7 @@ def main():
     sampler = GraBSampler(
         train_dataset,
         trainable_params=dict(model.named_parameters()),
+        batch_size=train_args.train_batch_size,
         # Probabilistic balance
         # Other specific
         timer=timer,
