@@ -94,7 +94,7 @@ class GraBArgs:
 @dataclass
 class TrainArgs:
     optimizer: str = field(
-        default="adam",
+        default="sgd",
         metadata={
             "aliases": ["-opt"],
             "choices": ["adam", "adamw", "sgd"],
