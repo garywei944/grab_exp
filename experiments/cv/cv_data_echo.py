@@ -58,11 +58,6 @@ class DESampler(Sampler):
         self.left = self.n
         self.right = self.n - 1
 
-        # used to compute pair_grads efficiently
-        self.filter = torch.tensor([1, -1], dtype=torch.float32, device="cuda").view(
-            1, 1, 2, 1
-        )
-
     # # pair balance not working well
     # def step(
     #     self,
@@ -103,9 +98,7 @@ class DESampler(Sampler):
 
         grads = torch.cat([v.reshape(b, -1) for k, v in grads.items()], dim=1)
 
-        pair_grad = F.conv2d(grads.view(1, 1, b, -1), self.filter, stride=(2, 1)).view(
-            b // 2, -1
-        )
+        pair_grad = grads[::2] - grads[1::2]
 
         signs = []
 
@@ -131,9 +124,7 @@ class DESampler(Sampler):
 
         grads = torch.cat([v.reshape(b, -1) for k, v in grads.items()], dim=1)
 
-        pair_grad = F.conv2d(grads.view(1, 1, b, -1), self.filter, stride=(2, 1)).view(
-            b // 2, -1
-        )
+        pair_grad = grads[::2] - grads[1::2]
 
         for i, sign in enumerate(signs):
             if sign:
