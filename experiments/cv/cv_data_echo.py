@@ -779,7 +779,7 @@ def main():
             )
 
         # Log to wandb
-        wandb.log(logs, step=epoch * 2)
+        wandb.log(logs, step=epoch)
 
     pbar.close()
     print(torch.cuda.memory_summary())

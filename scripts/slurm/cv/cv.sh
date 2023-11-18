@@ -31,14 +31,15 @@
 # done
 
 # # CIFAR10 best lr sgd 0.01 wd 0.01 momentum 0
+# Or lr 0.001 wd 0.0001 momentum 0.9
 
 DATASET=cifar10
 mkdir -p logs/$DATASET
 
-for seed in 1 2 3 4 5; do
-  for lr in 0.01; do
-    for wd in 0.01; do
-      for balance in rr mean batch; do
+for seed in 1 2 3; do
+  for lr in 0.001; do
+    for wd in 0.0001; do
+      for balance in rr mean; do
         sbatch -J $DATASET scripts/slurm/cv/cv.job \
           -d $DATASET \
           -model lenet \
@@ -49,8 +50,8 @@ for seed in 1 2 3 4 5; do
           -opt sgd \
           -lr $lr \
           -wd $wd \
-          -m 0 \
-          -b 64 \
+          -m 0.9 \
+          -b 16 \
           -eb 1024 \
           --report_grads 0 \
           --cpu_herding \
