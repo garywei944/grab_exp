@@ -443,10 +443,10 @@ def train(
         # Sharpness-aware minimization
         adaptive = False
         rho = 0.05
-        norm = torch.cat(
+        norm = torch.stack(
             [
-                (torch.abs(params[k]) * g if adaptive else g).flatten()
-                # .norm(p=2)
+                # https://github.com/davda54/sam/issues/16
+                (torch.abs(params[k]) * g if adaptive else g).norm(p=2)
                 for k, g in grads.items()
             ]
         ).norm(p=2)
