@@ -439,10 +439,31 @@ def train(
         signs = sampler.compute_sings(ft_per_sample_grads)
 
         grads = {k: g.mean(dim=0) for k, g in ft_per_sample_grads.items()}
-        updates, opt_state = optimizer.update(
-            grads, opt_state, params=params
-        )  # get updates
-        params = torchopt.apply_updates(params, updates)  # update network parameters
+
+        # Sharpness-aware minimization
+        adaptive = False
+        rho = 0.05
+        norm = torch.norm(
+            torch.stack(
+                [
+                    ((torch.abs(params[k]) if adaptive else 1.0) * g).norm(p=2)
+                    for k, g in grads.items()
+                ]
+            ),
+            p=2,
+        )
+        scale = rho / (norm + 1e-12)
+        old_params = {k: p.data.clone() for k, p in params.items()}
+        for k, p in params.items():
+            if k not in grads:
+                continue
+            e_w = torch.pow(p, 2) * grads[k] * scale
+            p.add_(e_w)
+
+        # updates, opt_state = optimizer.update(
+        #     grads, opt_state, params=params
+        # )  # get updates
+        # params = torchopt.apply_updates(params, updates)  # update network parameters
 
         running_loss += batch_loss.sum().item()
         n += len(batch_loss)
@@ -457,6 +478,13 @@ def train(
         sampler.step(ft_per_sample_grads, signs)
 
         grads = {k: g.mean(dim=0) for k, g in ft_per_sample_grads.items()}
+
+        # Sharpness-aware minimization
+        for k, p in params.items():
+            if k not in grads:
+                continue
+            p.data = old_params[k]
+
         updates, opt_state = optimizer.update(
             grads, opt_state, params=params
         )  # get updates
@@ -503,7 +531,7 @@ def main():
     ).parse_args_into_dataclasses()
 
     # Init wandb
-    config = {**vars(args), **vars(grab_args), **vars(train_args), "exp": "data_echo"}
+    config = {**vars(args), **vars(grab_args), **vars(train_args), "exp": "sam"}
     wandb.init(
         project=f"grab-{args.dataset_name}"
         if train_args.wandb_project is None
@@ -629,12 +657,12 @@ def main():
 
     # Train
     pbar = trange(
-        len(train_loader) * train_args.epochs // 2,
+        len(train_loader) * train_args.epochs,
         leave=False,
         disable=not train_args.tqdm,
     )
     # Now we are running data echoing
-    for epoch in range(0, train_args.epochs + 1, 2):
+    for epoch in range(train_args.epochs + 1):
         logs = {
             "epoch": epoch,
             "iteration": epoch * len(train_loader),
