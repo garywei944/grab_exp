@@ -443,15 +443,13 @@ def train(
         # Sharpness-aware minimization
         adaptive = False
         rho = 0.05
-        norm = torch.norm(
-            torch.stack(
-                [
-                    ((torch.abs(params[k]) if adaptive else 1.0) * g).norm(p=2)
-                    for k, g in grads.items()
-                ]
-            ),
-            p=2,
-        )
+        norm = torch.cat(
+            [
+                (torch.abs(params[k]) * g if adaptive else g).flatten()
+                # .norm(p=2)
+                for k, g in grads.items()
+            ]
+        ).norm(p=2)
         scale = rho / (norm + 1e-12)
         old_params = {k: p.data.clone() for k, p in params.items()}
         for k, p in params.items():
