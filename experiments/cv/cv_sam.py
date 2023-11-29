@@ -34,7 +34,7 @@ from experiments.utils.func_helpers import make_func_params
 from experiments.utils.arguments import GraBArgs, TrainArgs
 
 DATASETS = ["mnist", "fashion_mnist", "cifar10", "cifar100"]
-MODELS = ["lr", "lenet", "resnet", "minnet"]
+MODELS = ["lr", "lenet", "resnet", "minnet", "wrn"]
 
 
 class DESampler(Sampler):
@@ -363,6 +363,11 @@ def get_model(
         from models import MinNet
 
         model = MinNet().to(device)
+    # elif args.model_name == "wrn":
+    #     assert args.dataset_name == "cifar10"
+    #     from models import WRN
+    #
+    #     model = WRN().to(device)
     else:
         raise ValueError
     # Transform everything to functional programming
@@ -582,13 +587,13 @@ def main():
     logging.info(f"Number of parameters: d = {d:,}")
 
     # Load orders for FixedOrdering
-    orders = None
-    if grab_args.order_path is not None:
-        orders = torch.load(grab_args.order_path)
-        if len(orders.shape) == 2:
-            orders = orders[-1].tolist()
-        else:
-            orders = orders.tolist()
+    # orders = None
+    # if grab_args.order_path is not None:
+    #     orders = torch.load(grab_args.order_path)
+    #     if len(orders.shape) == 2:
+    #         orders = orders[-1].tolist()
+    #     else:
+    #         orders = orders.tolist()
 
     # sampler = GraBSampler(
     #     train_dataset,
@@ -660,7 +665,7 @@ def main():
         disable=not train_args.tqdm,
     )
     # Now we are running data echoing
-    for epoch in range(train_args.epochs + 1):
+    for epoch in range(0 if train_args.log_first_step else 1, train_args.epochs + 1):
         logs = {
             "epoch": epoch,
             "iteration": epoch * len(train_loader),

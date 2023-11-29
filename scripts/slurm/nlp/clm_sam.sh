@@ -3,18 +3,18 @@
 mkdir -p logs/clm
 
 dataset=wikitext
-dataset_config=wikitext-103-raw-v1
+dataset_config=wikitext-2-raw-v1
 config=gpt2
 balance=mean
 seq_len=128
 
 for seed in 42; do
-  for balance in mean; do
+  for balance in mean rr; do
     for lr in 0.001; do
       for wd in 0.0001; do
 #        for order in 2 3 4 5; do
           output_dir=checkpoints/gpt2/$dataset/$balance/$seed
-          sbatch scripts/slurm/nlp/clm.job \
+          sbatch scripts/slurm/nlp/clm_sam.job \
             --output_dir $output_dir \
             --dataset_name $dataset \
             --dataset_config_name $dataset_config \
@@ -36,7 +36,7 @@ for seed in 42; do
             --per_device_train_batch_size 64 \
             --per_device_eval_batch_size 256 \
             --max_train_samples 320000 \
-            --wandb
+            --wandb 0
 #            --random_projection kron
 #            --kron_order $order
 #        done

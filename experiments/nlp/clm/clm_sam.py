@@ -15,6 +15,7 @@ from tqdm import tqdm
 from absl import logging
 
 import torch
+from torch import Tensor
 from transformers import (
     HfArgumentParser,
     TrainingArguments,
@@ -26,6 +27,7 @@ from transformers import (
     AutoModelForCausalLM,
 )
 from transformers.training_args import OptimizerNames
+from torch.utils.data import Dataset, Subset, DataLoader, Sampler
 from datasets import load_dataset
 from accelerate import Accelerator
 
@@ -39,11 +41,106 @@ cd2root()
 from experiments.utils.func_helpers import make_func_params
 from experiments.utils.arguments import GraBArgs, TrainArgs
 
-from grabsampler import GraBSampler, BalanceType
+from grabsampler import BalanceType
 from grabsampler.utils import EventTimer, pretty_time, StaleMeanEstimator
 
 MODEL_CONFIG_CLASSES = list(MODEL_FOR_CAUSAL_LM_MAPPING.keys())
 MODEL_TYPES = tuple(conf.model_type for conf in MODEL_CONFIG_CLASSES)
+
+
+class DESampler(Sampler):
+    orders: Tensor
+    next_orders: Tensor
+    acc: Tensor
+
+    def __init__(self, n: int, d: int, *args, **kwargs):
+        super().__init__()
+        self.n = n
+        self.d = d
+
+        self.orders: Tensor = torch.randperm(n, dtype=torch.int64)
+        # self.orders = torch.arange(n, dtype=torch.int64)
+        self.next_orders: Tensor = self.orders.clone()
+
+        self.acc = torch.zeros(d, dtype=torch.float32, device=torch.device("cuda"))
+
+        self.idx = self.n
+        self.left = self.n
+        self.right = self.n - 1
+
+    def compute_sings(self, grads: dict[str, Tensor]):
+        b = next(iter(grads.values())).shape[0]
+
+        assert b % 2 == 0, f"Batch size must be even, got {b}"
+        acc = self.acc.clone()
+
+        grads = torch.cat([v.reshape(b, -1) for k, v in grads.items()], dim=1)
+
+        pair_grad = grads[::2] - grads[1::2]
+
+        signs = []
+
+        for i in range(b // 2):
+            if torch.inner(pair_grad[i], acc) < 0:
+                signs.append(True)
+                acc.add_(pair_grad[i])
+            else:
+                signs.append(False)
+                acc.sub_(pair_grad[i])
+
+        return signs
+
+    def step(
+        self,
+        grads: dict[str, Tensor],
+        signs: list[bool],
+    ):
+        b = next(iter(grads.values())).shape[0]
+
+        assert b % 2 == 0
+        assert len(signs) == b // 2
+
+        grads = torch.cat([v.reshape(b, -1) for k, v in grads.items()], dim=1)
+
+        pair_grad = grads[::2] - grads[1::2]
+
+        for i, sign in enumerate(signs):
+            if sign:
+                self.next_orders[self.left] = self.orders[self.idx]
+                self.idx += 1
+                self.next_orders[self.right] = self.orders[self.idx]
+                self.acc += pair_grad[i]
+            else:
+                self.next_orders[self.right] = self.orders[self.idx]
+                self.idx += 1
+                self.next_orders[self.left] = self.orders[self.idx]
+                self.acc -= pair_grad[i]
+
+            self.idx += 1
+            self.left += 1
+            self.right -= 1
+
+    def reset(self):
+        assert self.left > self.right
+        assert self.idx == self.n
+
+        self.idx = 0
+        self.orders.copy_(self.next_orders)
+        self.next_orders.zero_()
+
+        self.left = 0
+        self.right = self.n - 1
+
+        self.acc.zero_()
+
+        # print(self.orders[:128])
+        # print(self.orders[-128:])
+
+    def __len__(self):
+        return self.n
+
+    def __iter__(self):
+        yield from self.orders
 
 
 @dataclass
@@ -208,6 +305,19 @@ class DataTrainingArguments:
         default=True,
         metadata={"help": "Whether to keep line breaks when using TXT files or not."},
     )
+    wandb: bool = field(
+        default=False,
+        metadata={
+            "help": "Use wandb for logging",
+        },
+    )
+    wandb_project: str = field(
+        default=None,
+        metadata={
+            "aliases": ["-wp"],
+            "help": "Wandb project name",
+        },
+    )
 
     def __post_init__(self):
         if (
@@ -252,6 +362,7 @@ def train(
     max_steps,
     device="cuda",
 ):
+    sampler.reset()
     # TODO: no resume or accumulate gradient
     losses = []
     for step, batch in enumerate(train_loader):
@@ -259,13 +370,62 @@ def train(
         ft_per_sample_grads, batch_loss = ft_compute_sample_grad_and_loss(
             params, buffers, dict(batch)
         )
-        sampler.step(ft_per_sample_grads)
+
+        # Gary: First compute signs of grads
+        signs = sampler.compute_sings(ft_per_sample_grads)
+
         grads = {k: g.mean(dim=0) for k, g in ft_per_sample_grads.items()}
+
+        # Sharpness-aware minimization
+        adaptive = False
+        rho = 0.05
+        norm = torch.stack(
+            [
+                # https://github.com/davda54/sam/issues/16
+                (torch.abs(params[k]) * g if adaptive else g).norm(p=2)
+                for k, g in grads.items()
+            ]
+        ).norm(p=2)
+        scale = rho / (norm + 1e-12)
+        old_params = {k: p.data.clone() for k, p in params.items()}
+        for k, p in params.items():
+            if k not in grads:
+                continue
+            e_w = torch.pow(p, 2) * grads[k] * scale
+            p.add_(e_w)
+
+        # losses.append(batch_loss.float())
+
+        # Just an extra run without sampler step
+        ft_per_sample_grads, batch_loss = ft_compute_sample_grad_and_loss(
+            params, buffers, dict(batch)
+        )
+
+        # Then update acc and orders according to the signs
+        sampler.step(ft_per_sample_grads, signs)
+
+        grads = {k: g.mean(dim=0) for k, g in ft_per_sample_grads.items()}
+
+        # Sharpness-aware minimization
+        for k, p in params.items():
+            if k not in grads:
+                continue
+            p.data = old_params[k]
+
         updates, opt_state = optimizer.update(
             grads, opt_state, params=params
         )  # get updates
-        params = torchopt.apply_updates(params, updates)  # update model parameters
+        params = torchopt.apply_updates(params, updates)  # update network parameters
         losses.append(batch_loss.float())
+
+        ############################
+        # sampler.step(ft_per_sample_grads)
+        # grads = {k: g.mean(dim=0) for k, g in ft_per_sample_grads.items()}
+        # updates, opt_state = optimizer.update(
+        #     grads, opt_state, params=params
+        # )  # get updates
+        # params = torchopt.apply_updates(params, updates)  # update model parameters
+        # losses.append(batch_loss.float())
 
         progress_bar.update(1)
         completed_steps += 1
@@ -348,15 +508,16 @@ def main():
     )
     wandb.init(
         project=f"grab-{model_name}-{data_args.dataset_name}"
-        if grab_args.wandb_project is None
-        else grab_args.wandb_project,
+        if data_args.wandb_project is None
+        else data_args.wandb_project,
         entity="grab",
-        mode="online" if grab_args.use_wandb else "offline",
+        mode="online" if data_args.wandb else "offline",
         config={
             **vars(model_args),
             **vars(data_args),
             **vars(training_args),
             **vars(grab_args),
+            "exp": "sam",
         },
     )
 
@@ -636,33 +797,45 @@ def main():
         else:
             orders = orders.tolist()
 
-    sampler = GraBSampler(
-        train_dataset,
-        params,
-        batch_size=training_args.train_batch_size,
-        # Random projection
-        seed=training_args.seed,  # Only used for generating random projection
-        # Probabilistic balance
-        orders=orders,
-        # Other specific
-        dtype=dtype,
-        device=device,
-        timer=timer,
-        record_herding=grab_args.record_grads,
-        stale_mean_herding=False,
-        cuda_herding=not grab_args.cpu_herding,
-        record_norm=grab_args.record_grads,
-        **vars(grab_args),
+    # sampler = GraBSampler(
+    #     train_dataset,
+    #     params,
+    #     batch_size=training_args.train_batch_size,
+    #     # Random projection
+    #     seed=training_args.seed,  # Only used for generating random projection
+    #     # Probabilistic balance
+    #     orders=orders,
+    #     # Other specific
+    #     dtype=dtype,
+    #     device=device,
+    #     timer=timer,
+    #     record_herding=grab_args.record_grads,
+    #     stale_mean_herding=False,
+    #     cuda_herding=not grab_args.cpu_herding,
+    #     record_norm=grab_args.record_grads,
+    #     **vars(grab_args),
+    # )
+    sampler = DESampler(
+        len(train_dataset),
+        d,
     )
 
     # Initiate data loaders
     train_loader = torch.utils.data.DataLoader(
         dataset=train_dataset,
         batch_size=training_args.train_batch_size,
-        sampler=sampler,
+        # Support for RR
+        sampler=None
+        if grab_args.balance_type == BalanceType.RANDOM_RESHUFFLING
+        else sampler,
+        # Support for RR
+        shuffle=True
+        if grab_args.balance_type == BalanceType.RANDOM_RESHUFFLING
+        else False,
         persistent_workers=False,
         num_workers=training_args.dataloader_num_workers,
         pin_memory=training_args.dataloader_pin_memory,
+        drop_last=True,
     )
     train_eval_loader = torch.utils.data.DataLoader(
         dataset=train_dataset,
@@ -803,28 +976,28 @@ def main():
                 }
             )
 
-            if grab_args.record_grads:
-                grad_norms = sampler.sorter.grad_norms
-
-                # Save the norms
-                norm_mean = np.mean(grad_norms)
-                norm_std = np.std(grad_norms)
-                norm_max = np.max(grad_norms)
-                df_grad_norms[epoch] = grad_norms
-
-                herding = sampler.sorter.herding
-                avg_grad_error = sampler.sorter.avg_grad_error
-
-                # Update only after the first epoch
-                logs.update(
-                    {
-                        "norm_mean": norm_mean,
-                        "norm_std": norm_std,
-                        "norm_max": norm_max,
-                        "herding": herding,
-                        "avg_grad_error": avg_grad_error,
-                    }
-                )
+            # if grab_args.record_grads:
+            #     grad_norms = sampler.sorter.grad_norms
+            #
+            #     # Save the norms
+            #     norm_mean = np.mean(grad_norms)
+            #     norm_std = np.std(grad_norms)
+            #     norm_max = np.max(grad_norms)
+            #     df_grad_norms[epoch] = grad_norms
+            #
+            #     herding = sampler.sorter.herding
+            #     avg_grad_error = sampler.sorter.avg_grad_error
+            #
+            #     # Update only after the first epoch
+            #     logs.update(
+            #         {
+            #             "norm_mean": norm_mean,
+            #             "norm_std": norm_std,
+            #             "norm_max": norm_max,
+            #             "herding": herding,
+            #             "avg_grad_error": avg_grad_error,
+            #         }
+            #     )
         with timer("val"):
             train_eval_loss, train_eval_ppl = validate(
                 train_eval_loader, model, disable_tqdm=training_args.disable_tqdm
@@ -864,14 +1037,14 @@ def main():
                 f'train: {pretty_time(timer["train"][-1])} '
                 f'val: {pretty_time(timer["val"][-1])}'
             )
-            if grab_args.record_grads:
-                log_msg += (
-                    f" | norm_mean: {norm_mean:.2f} "
-                    f"norm_std: {norm_std:.2f} "
-                    f"norm_max: {norm_max:.2f} | "
-                    f"herding: {herding:.2f} "
-                    f"avg_grad_error: {avg_grad_error:.2f}"
-                )
+            # if grab_args.record_grads:
+            #     log_msg += (
+            #         f" | norm_mean: {norm_mean:.2f} "
+            #         f"norm_std: {norm_std:.2f} "
+            #         f"norm_max: {norm_max:.2f} | "
+            #         f"herding: {herding:.2f} "
+            #         f"avg_grad_error: {avg_grad_error:.2f}"
+            #     )
             print(log_msg)
 
         # save checkpoint
@@ -880,11 +1053,11 @@ def main():
             torch.save(model.state_dict(), checkpoint_path / checkpoint_name)
 
         if epoch > 0:
-            if grab_args.record_grads:
-                # Save the grad norms
-                df_grad_norms.describe().to_csv(
-                    checkpoint_path / f"{exp_id}_{epochs}_grad_norms_proc.csv"
-                )
+            # if grab_args.record_grads:
+            #     # Save the grad norms
+            #     df_grad_norms.describe().to_csv(
+            #         checkpoint_path / f"{exp_id}_{epochs}_grad_norms_proc.csv"
+            #     )
             # Save the timer
             timer.save(checkpoint_path / f"{exp_id}_{epochs}_timer_proc.pt")
             timer.summary().to_csv(
@@ -901,9 +1074,9 @@ def main():
 
     print(torch.cuda.memory_summary())
 
-    if grab_args.record_grads:
-        print("-" * 50)
-        print(df_grad_norms.describe())
+    # if grab_args.record_grads:
+    #     print("-" * 50)
+    #     print(df_grad_norms.describe())
 
     print("-" * 50)
     print("Timer:")
@@ -923,18 +1096,18 @@ def main():
     # Save the timer
     timer.save(checkpoint_path / f"{exp_id}_{epochs}_timer.pt")
     timer.summary().to_csv(checkpoint_path / f"{exp_id}_{epochs}_timer.csv")
-    if grab_args.record_grads:
-        # Save the grad norms
-        df_grad_norms.describe().to_csv(
-            checkpoint_path / f"{exp_id}_{epochs}_grad_norms.csv"
-        )
+    # if grab_args.record_grads:
+    #     # Save the grad norms
+    #     df_grad_norms.describe().to_csv(
+    #         checkpoint_path / f"{exp_id}_{epochs}_grad_norms.csv"
+    #     )
 
-    if grab_args.record_orders:
-        # Save the orders
-        torch.save(
-            torch.tensor(sampler.orders_history),
-            checkpoint_path / f"{exp_id}_{epochs}_orders.pt",
-        )
+    # if grab_args.record_orders:
+    #     # Save the orders
+    #     torch.save(
+    #         torch.tensor(sampler.orders_history),
+    #         checkpoint_path / f"{exp_id}_{epochs}_orders.pt",
+    #     )
 
 
 # pure function
@@ -996,7 +1169,7 @@ def get_exp_id(
         f"_b_{training_args.train_batch_size}_seed_{training_args.seed}"
     )
 
-    if grab_args.normalize_grads:
+    if grab_args.normalize_grad:
         exp_id += "_norm"
     if grab_args.random_projection:
         exp_id += f"_pi_{grab_args.random_projection_eps}"
