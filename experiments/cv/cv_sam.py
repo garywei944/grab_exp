@@ -202,6 +202,12 @@ class Args:
             "help": "Depth of ResNet",
         },
     )
+    adaptive: bool = field(
+        default=False,
+        metadata={
+            "help": "Use adaptive SAM",
+        },
+    )
 
 
 def get_exp_id(args: Args, grab_args: GraBArgs, train_args: TrainArgs) -> str:
@@ -428,6 +434,7 @@ def train(
     metric: evaluate.EvaluationModule,
     pbar: tqdm,
     device: torch.device = torch.device("cuda"),
+    adaptive: bool = False,
 ):
     sampler.reset()
     running_loss, n = 0, 0
@@ -446,12 +453,11 @@ def train(
         grads = {k: g.mean(dim=0) for k, g in ft_per_sample_grads.items()}
 
         # Sharpness-aware minimization
-        adaptive = False
         rho = 0.05
         norm = torch.stack(
             [
                 # https://github.com/davda54/sam/issues/16
-                (torch.abs(params[k]) * g if adaptive else g).norm(p=2)
+                (params[k] * g if adaptive else g).norm(p=2)
                 for k, g in grads.items()
             ]
         ).norm(p=2)
@@ -460,7 +466,7 @@ def train(
         for k, p in params.items():
             if k not in grads:
                 continue
-            e_w = torch.pow(p, 2) * grads[k] * scale
+            e_w = torch.pow(p, 2) * grads[k] * scale if adaptive else grads[k] * scale
             p.add_(e_w)
 
         # updates, opt_state = optimizer.update(
@@ -534,7 +540,12 @@ def main():
     ).parse_args_into_dataclasses()
 
     # Init wandb
-    config = {**vars(args), **vars(grab_args), **vars(train_args), "exp": "sam"}
+    config = {
+        **vars(args),
+        **vars(grab_args),
+        **vars(train_args),
+        "exp": "asam" if args.adaptive else "sam",
+    }
     wandb.init(
         project=f"grab-{args.dataset_name}"
         if train_args.wandb_project is None
@@ -684,6 +695,7 @@ def main():
                     metric=train_metric,
                     pbar=pbar,
                     device=device,
+                    adaptive=args.adaptive,
                 )
             train_acc = train_metric.compute()["accuracy"]
             logs.update(
@@ -795,13 +807,6 @@ def main():
             timer.save(checkpoint_path / f"{exp_id}_{train_args.epochs}_timer_proc.pt")
             timer.summary().to_csv(
                 checkpoint_path / f"{exp_id}_{train_args.epochs}_timer_proc.csv"
-            )
-
-        # Save the orders
-        if grab_args.record_orders:
-            torch.save(
-                torch.tensor(sampler.orders_history),
-                checkpoint_path / f"{exp_id}_{train_args.epochs}_orders_proc.pt",
             )
 
         # Log to wandb

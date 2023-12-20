@@ -38,9 +38,10 @@ dependencies:
   - scikit-image
 
   # PyTorch
-  - pytorch~=2.1.0
+  - pytorch~=2.1.2
   - torchvision~=0.16.0
-  - pytorch-lightning~=1.6.2
+  - lightning~=2.1.2
+  - pytorch-lightning~=2.1.2
   - pytorch-sparse~=0.6.18
 
   # Huggingface
@@ -53,6 +54,7 @@ dependencies:
   - absl-py # for logging
   - overrides
   - typed-argument-parser # for type hinting in argparse
+  - jsonargparse
   - torchmetrics
   - torchinfo
   - bayesian-optimization
@@ -65,6 +67,7 @@ dependencies:
   # Development
   - jupyter
   - wandb
+  - tensorboard
 
   # PyPI common practice
   - click
