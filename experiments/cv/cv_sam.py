@@ -203,9 +203,15 @@ class Args:
         },
     )
     adaptive: bool = field(
-        default=False,
+        default=True,
         metadata={
             "help": "Use adaptive SAM",
+        },
+    )
+    rho: float = field(
+        default=0.5,
+        metadata={
+            "help": "Rho for SAM",
         },
     )
 
@@ -435,6 +441,7 @@ def train(
     pbar: tqdm,
     device: torch.device = torch.device("cuda"),
     adaptive: bool = False,
+    rho: float = 0.05,
 ):
     sampler.reset()
     running_loss, n = 0, 0
@@ -453,7 +460,6 @@ def train(
         grads = {k: g.mean(dim=0) for k, g in ft_per_sample_grads.items()}
 
         # Sharpness-aware minimization
-        rho = 0.05
         norm = torch.stack(
             [
                 # https://github.com/davda54/sam/issues/16
@@ -696,6 +702,7 @@ def main():
                     pbar=pbar,
                     device=device,
                     adaptive=args.adaptive,
+                    rho=args.rho,
                 )
             train_acc = train_metric.compute()["accuracy"]
             logs.update(
