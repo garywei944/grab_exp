@@ -32,6 +32,7 @@ dependencies:
   - pandas
   - openpyxl # to open excel files
   - pandarallel # for parallel computing panda dataframe
+  - cvxpy
 
   # scikit-learn
   - scikit-learn
@@ -55,9 +56,10 @@ dependencies:
   - overrides
   - typed-argument-parser # for type hinting in argparse
   - jsonargparse
-  - torchmetrics
+  - torchmetrics # lighting metrics
   - torchinfo
   - bayesian-optimization
+  - hydra-core # for config using CLI
 
   # Visualization
   - matplotlib
@@ -68,6 +70,7 @@ dependencies:
   - jupyter
   - wandb
   - tensorboard
+  - tensorboardx
 
   # PyPI common practice
   - click
@@ -97,5 +100,7 @@ dependencies:
       - separableconv-torch
       - kmeans1d # for k-means quantization
       - cd2root
+      - lightning[pytorch-extra]
+      - jsonargparse[signatures]>=4.18.0 # lightning cli
       # Trial
       - omegaconf-argparse # to use omegaconf with argparse

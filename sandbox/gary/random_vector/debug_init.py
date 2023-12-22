@@ -5,7 +5,6 @@ from absl import logging
 def random_vector_with_2norm(_d, norm, dtype=torch.float16, device="cuda"):
     # Generate Uniform Random Variates with Constant Norm
     # https://stats.stackexchange.com/a/487505
-    # https://stats.stackexchange.com/a/487505
     v = torch.normal(0, 1, (_d,), dtype=dtype, device=device)
     v = v * norm / torch.norm(v)
     return v.to(dtype=dtype)
