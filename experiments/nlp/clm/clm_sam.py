@@ -460,7 +460,7 @@ def validate(eval_loader, model, device="cuda", disable_tqdm=False):
             b = v.size(0)
             break
         outputs = model(**batch)
-        loss = outputs.loss
+        loss = outputs.loss_fn
         losses.append(loss.repeat(b))
     losses = torch.cat(losses)
 
@@ -1126,7 +1126,7 @@ def compute_loss(model, params, buffers, kwargs):
         kwargs=kwargs,
     )
 
-    return out.loss
+    return out.loss_fn
 
 
 def get_lr_scheduler(learning_rate, num_warmup_steps, num_training_steps, min_lr):

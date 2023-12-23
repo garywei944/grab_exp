@@ -805,7 +805,7 @@ def main():
             with torch.no_grad():
                 outputs = model(**batch)
 
-            loss = outputs.loss
+            loss = outputs.loss_fn
             losses.append(
                 accelerator.gather_for_metrics(
                     loss.repeat(args.per_device_eval_batch_size)
@@ -891,7 +891,7 @@ def compute_loss(model, params, buffers, kwargs):
         kwargs=kwargs,
     )
 
-    return out.loss
+    return out.loss_fn
 
 
 def get_func(model, batch: dict):

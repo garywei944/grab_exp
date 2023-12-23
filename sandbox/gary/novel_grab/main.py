@@ -24,42 +24,20 @@ def grab(vec: Tensor, noise: bool = False) -> Tensor:
     acc = torch.zeros(d, dtype=vec.dtype, device=vec.device)
     orders = torch.zeros(n, dtype=torch.int64)
 
-    z = torch.randn(d, dtype=vec.dtype, device=vec.device) * 0.01 if noise else 0
+    z = torch.randn(d, dtype=vec.dtype, device=vec.device) * 0.05 if noise else 0
 
     left, right = 0, n - 1
     for i in range(n):
         if torch.inner(vec[i], acc) < 0:
-        # print(f'stat: {torch.inner(vec[i], acc)}')
-        # if random.random() < 0.5 - torch.inner(
-        #     vec[i] / vec[i].norm(), acc / acc.norm()
-        # )*8:
+            # print(f'stat: {torch.inner(vec[i], acc)}')
+            # if random.random() < 0.5 - torch.inner(
+            #     vec[i] / vec[i].norm(), acc / acc.norm()
+            # )*8:
             acc += vec[i] + z
             orders[left] = i
             left += 1
         else:
             acc -= vec[i] + z
-            orders[right] = i
-            right -= 1
-
-    assert left == right + 1
-
-    return orders
-
-
-def new_grab(vec: Tensor) -> Tensor:
-    n, d = vec.shape
-
-    acc = torch.zeros(d, dtype=vec.dtype, device=vec.device)
-    orders = torch.zeros(n, dtype=torch.int64)
-
-    left, right = 0, n - 1
-    for i in range(n):
-        if torch.inner(vec[i], acc) < 0:
-            acc += vec[i]
-            orders[left] = i
-            left += 1
-        else:
-            acc -= vec[i]
             orders[right] = i
             right -= 1
 
@@ -76,10 +54,12 @@ def main():
 
     V_copy = V.clone()
 
+    print("Random Reshufling")
     for _ in range(10):
         print(herding(V[torch.randperm(n, dtype=torch.int64)]))
 
     print("-" * 20)
+    print("GraB")
 
     for _ in range(10):
         # print("-" * 20)
@@ -94,6 +74,7 @@ def main():
     V.copy_(V_copy)
 
     print("-" * 20)
+    print("GraB with Noise adding to accumulator")
 
     for _ in range(10):
         # print("-" * 20)

@@ -1,5 +1,6 @@
 .idea
 wandb
+lightning_logs
 
 # ignore files under data/
 # files should not be uploaded to GitHub, etc

@@ -5,10 +5,10 @@
 
 name: grab
 channels:
-  - pyg
   - nvidia # for CUDA
   - pytorch
   - huggingface
+  - pyg
   - conda-forge
   - anaconda
   - defaults
@@ -18,21 +18,34 @@ dependencies:
   - cudatoolkit=11.8
   - pytorch-cuda=11.8
   - cudnn~=8.8.0 # https://docs.nvidia.com/deeplearning/cudnn/support-matrix/index.html
+
+  # System utils
   - psutil
+  - nvtop
+  - nvitop
+
+  # essential functionality
+  - overrides
   - python-dotenv
   - ruamel.yaml
-  - omegaconf # for config
+  - absl-py
   - tqdm
   - attrs
   - tabulate
 
+  # argparse
+  - omegaconf # for config
+  - typed-argument-parser # for type hinting in argparse
+  - hydra-core # for config using CLI
+
   # Frameworks
-  - numpy~=1.25.1
+  - numpy~=1.26.2
   - scipy
   - pandas
   - openpyxl # to open excel files
   - pandarallel # for parallel computing panda dataframe
   - cvxpy
+  - loralib~=0.1.2
 
   # scikit-learn
   - scikit-learn
@@ -41,25 +54,25 @@ dependencies:
   # PyTorch
   - pytorch~=2.1.2
   - torchvision~=0.16.0
-  - lightning~=2.1.2
-  - pytorch-lightning~=2.1.2
+  - torchinfo
   - pytorch-sparse~=0.6.18
 
   # Huggingface
   - transformers~=4.33.3
-  - datasets~=2.14.5
-  - accelerate~=0.23.0
+  - datasets~=2.16.0
+  - accelerate~=0.25.0
+  - evaluate~=0.4.1
   - tokenizers>=0.13.1 # https://stackoverflow.com/a/74386742
+  - peft~=0.7.1
+
+  # Lightning
+  - lightning~=2.1.3
+  - lightning-bolts~=0.7.0
+  - torchmetrics # lighting metrics
 
   # utils
-  - absl-py # for logging
-  - overrides
-  - typed-argument-parser # for type hinting in argparse
-  - jsonargparse
-  - torchmetrics # lighting metrics
-  - torchinfo
   - bayesian-optimization
-  - hydra-core # for config using CLI
+  - singleton-decorator
 
   # Visualization
   - matplotlib
@@ -69,7 +82,6 @@ dependencies:
   # Development
   - jupyter
   - wandb
-  - tensorboard
   - tensorboardx
 
   # PyPI common practice
@@ -90,17 +102,13 @@ dependencies:
   # for dependency completeness.
   - pip:
       - build
-      - nvitop # for monitoring GPU usage
+      # https://github.com/Lightning-AI/pytorch-lightning/blob/master/requirements/pytorch/extra.txt
+      - lightning[pytorch-extra]
+      - lightning-gpt
       - sourcery
-      - singleton-decorator
       - torchopt~=0.7.2
-      - evaluate~=0.4.1
-      - peft~=0.5.0
-      - loralib==0.1.2
       - separableconv-torch
       - kmeans1d # for k-means quantization
       - cd2root
-      - lightning[pytorch-extra]
-      - jsonargparse[signatures]>=4.18.0 # lightning cli
       # Trial
       - omegaconf-argparse # to use omegaconf with argparse

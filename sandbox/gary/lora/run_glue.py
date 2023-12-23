@@ -720,7 +720,7 @@ def main():
                 parameter_and_buffer_dicts=(params, buffers),
                 args=(input_ids,),
                 kwargs=kwargs,
-            ).loss
+            ).loss_fn
 
         def get_func(batch: dict):
             return vmap(

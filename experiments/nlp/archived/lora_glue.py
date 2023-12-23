@@ -888,7 +888,7 @@ def compute_loss(model, params, buffers, kwargs):
         kwargs=kwargs,
     )
 
-    return out.loss
+    return out.loss_fn
 
 
 def get_func(model, batch: dict):

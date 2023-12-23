@@ -739,7 +739,7 @@ def main():
 
             with accelerator.accumulate(model):
                 outputs = model(**batch)
-                loss = outputs.loss
+                loss = outputs.loss_fn
                 # We keep track of the loss at each epoch
                 if args.with_tracking:
                     total_loss += loss.detach().float()
@@ -771,7 +771,7 @@ def main():
             with torch.no_grad():
                 outputs = model(**batch)
 
-            loss = outputs.loss
+            loss = outputs.loss_fn
             losses.append(
                 accelerator.gather_for_metrics(
                     loss.repeat(args.per_device_eval_batch_size)

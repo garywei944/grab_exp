@@ -27,7 +27,6 @@ from grabsampler import GraBSampler, BalanceType
 from grabsampler.utils import EventTimer, pretty_time
 
 from cd2root import cd2root
-
 cd2root()
 
 from experiments.utils.func_helpers import make_func_params
