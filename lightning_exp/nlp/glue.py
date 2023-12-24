@@ -1,5 +1,6 @@
 import lightning as L
 from lightning.pytorch.cli import LightningCLI, LightningArgumentParser
+from lightning.pytorch.loggers import TensorBoardLogger, WandbLogger
 import torch
 from torch import nn, Tensor
 from torch_optimizer import Adafactor
@@ -9,8 +10,6 @@ import evaluate
 
 import os
 from pathlib import Path
-from datetime import datetime
-from attrs import define, field
 
 from glue_dm import GLUEDataModule
 
@@ -33,8 +32,8 @@ class GLUEModel(L.LightningModule):
     def __init__(
         self,
         model_name_or_path: str,
-        task_name: str = "mrpc",
-        num_labels: int = 2,
+        task_name: str,
+        num_labels: int,
         learning_rate: float = 1e-3,
         weight_decay: float = 0.0,
     ):
@@ -56,10 +55,13 @@ class GLUEModel(L.LightningModule):
         self.model = AutoModelForSequenceClassification.from_pretrained(
             self.model_name_or_path, config=self.config
         )
-        self.metric = evaluate.load(
+        self.train_metric = evaluate.load(
             "glue",
             self.task_name,
-            experiment_id=datetime.now().strftime("%d-%m-%Y_%H-%M-%S"),
+        )
+        self.val_metric = evaluate.load(
+            "glue",
+            self.task_name,
         )
 
     def forward(self, **inputs):
@@ -76,15 +78,18 @@ class GLUEModel(L.LightningModule):
         val_loss, logits = outputs[:2]
 
         if self.num_labels > 1:
-            preds = torch.argmax(logits, dim=-1)
+            predictions = torch.argmax(logits, dim=-1)
         else:
-            preds = logits.squeeze()
+            predictions = logits.squeeze()
 
-        return {"loss": val_loss, "preds": preds, "labels": batch["labels"]}
+        self.val_metric.add_batch(predictions=predictions, references=batch["labels"])
 
-    # def on_validation_epoch_end(self) -> None:
-    #     print("on_validation_epoch_end")
-    #     pass
+        self.log("val_loss", val_loss, on_epoch=True, prog_bar=True)
+
+        return {"loss": val_loss, "predictions": predictions, "labels": batch["labels"]}
+
+    def on_validation_epoch_end(self) -> None:
+        self.log_dict(self.val_metric.compute(), prog_bar=True)
 
     # def validation_epoch_end(self, outputs):
     #     preds = torch.cat([x["preds"] for x in outputs])
@@ -121,6 +126,10 @@ class GLUEModel(L.LightningModule):
         return Adafactor(
             optimizer_grouped_parameters,
             lr=self.learning_rate,
+            relative_step=False,
+            warmup_init=False,
+            clip_threshold=1.0,
+            scale_parameter=True,
         )
 
 
@@ -132,17 +141,41 @@ def main():
     #
     # print(args)
 
-    dm = GLUEDataModule("t5-small", "mrpc")
+    MODEL_NAME = "google/t5-v1_1-small"
+    TASK_NAME = "cola"
+
+    L.seed_everything(42)
+
+    dm = GLUEDataModule(MODEL_NAME, TASK_NAME)
     dm.prepare_data()
     dm.setup()
 
-    model = GLUEModel("t5-small", num_labels=dm.num_labels, task_name="mrpc")
+    model = GLUEModel(MODEL_NAME, num_labels=dm.num_labels, task_name=TASK_NAME)
 
     # cli = CLI(GLUEModel, GLUEDataModule, run=False)
     #
     trainer = L.Trainer(
-        max_steps=2**18,
-        precision="16-mixed"
+        max_steps=250_000,
+        check_val_every_n_epoch=None,
+        val_check_interval=1000,
+        logger=[
+            TensorBoardLogger("lightning_logs", name=MODEL_NAME),
+            WandbLogger(
+                project="t5-glue",
+                entity="grab",
+                mode="offline",
+            ),
+        ],
+        callbacks=[
+            # L.pytorch.callbacks.EarlyStopping(monitor="val_loss"),
+            L.pytorch.callbacks.ModelCheckpoint(
+                monitor="f1",
+                save_top_k=1,
+                save_last=True,
+                filename="{epoch:02d}-{val_loss:.2f}",
+            ),
+            L.pytorch.callbacks.Timer(),
+        ],
         # fast_dev_run=True,
     )
     trainer.fit(model, datamodule=dm)

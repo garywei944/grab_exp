@@ -103,6 +103,7 @@ dependencies:
   - pip:
       - build
       - datargs
+      - dict-hash
       # https://github.com/Lightning-AI/pytorch-lightning/blob/master/requirements/pytorch/extra.txt
       - lightning[pytorch-extra]
       - lightning-gpt
