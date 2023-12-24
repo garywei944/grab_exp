@@ -58,10 +58,10 @@ dependencies:
   - pytorch-sparse~=0.6.18
 
   # Huggingface
-  - transformers~=4.33.3
-  - datasets~=2.16.0
+  - transformers~=4.36.1
+  - datasets~=2.15.0
   - accelerate~=0.25.0
-  - evaluate~=0.4.1
+  - evaluate~=0.4.0
   - tokenizers>=0.13.1 # https://stackoverflow.com/a/74386742
   - peft~=0.7.1
 
