@@ -1,9 +1,10 @@
+from typing import Any
+
 import lightning as L
 import datasets
 from datasets import DatasetDict, Dataset
 from transformers import (
     AutoTokenizer,
-    PreTrainedTokenizerBase,
     BatchEncoding,
     default_data_collator,
     DataCollatorWithPadding,
@@ -11,8 +12,11 @@ from transformers import (
 )
 from torch.utils.data import DataLoader
 
-from attrs import define, field
+from attrs import define
+from dataclasses import dataclass
+from pathlib import Path
 import os
+from dict_hash import sha256
 
 GLUE_TASK_TO_KEYS = {
     "cola": ("sentence",),
@@ -50,75 +54,46 @@ GLUE_COLUMNS = [
 ]
 
 
-# class GLUEDataModule(L.LightningDataModule):
-#     tokenizer: PreTrainedTokenizerBase
-#     num_labels: int
-#     dataset: DatasetDict
-#     train_dataset: Dataset
-#     eval_dataset: Dataset
-#
-#     def __init__(
-#         self,
-#         model_name_or_path: str = "",
-#         task_name: str = "mrpc",
-#         pad_to_max_length: bool = True,
-#         max_seq_length: int = 128,
-#         train_batch_size: int = 32,
-#         eval_batch_size: int = 32,
-#         num_workers: int = os.cpu_count(),
-#         use_fast_tokenizer: bool = True,
-#         use_fp16: bool = False,
-#     ):
-#         super().__init__()
-#
-#         self.model_name_or_path = model_name_or_path
-#         self.task_name = task_name
-#         self.pad_to_max_length = pad_to_max_length
-#         self.max_seq_length = max_seq_length
-#         self.train_batch_size = train_batch_size
-#         self.eval_batch_size = eval_batch_size
-#         self.num_workers = num_workers
-#         self.use_fast_tokenizer = use_fast_tokenizer
-#         self.use_fp16 = use_fp16
-#
-#         self.save_hyperparameters()
-#
-#         self.text_keys = TASK_TO_KEYS[self.task_name]
-#         self.is_regression = self.task_name == "stsb"
-#
-#         if self.pad_to_max_length:
-#             self.data_collator = default_data_collator
-#         else:
-#             self.data_collator = DataCollatorWithPadding(
-#                 self.tokenizer, pad_to_multiple_of=8 if self.use_fp16 else None
-#             )
-
-
-@define
 class GLUEDataModule(L.LightningDataModule):
-    model_name_or_path: str
-    task_name: str = "mrpc"
-    max_seq_length: int = 128
-    pad_to_max_length: bool = True
-    train_batch_size: int = 32
-    eval_batch_size: int = 32
-    num_workers: int = os.cpu_count()
-    use_fast_tokenizer: bool = True
-    use_fp16: bool = False
+    train_dataset: Dataset
+    val_dataset: Dataset
 
-    tokenizer: PreTrainedTokenizerBase = field(init=False)
-    dataset: DatasetDict = field(init=False)
-    train_dataset: Dataset = field(init=False)
-    eval_dataset: Dataset = field(init=False)
-
-    def __attrs_pre_init__(self):
+    def __init__(
+        self,
+        model_name_or_path: str,
+        task_name: str = "mrpc",
+        pad_to_max_length: bool = True,
+        max_length: int = 128,
+        train_batch_size: int = 32,
+        eval_batch_size: int = 32,
+        num_workers: int = 4,
+        use_fast_tokenizer: bool = True,
+        use_fp16: bool = False,
+        data_path: str = "data/processed",
+    ):
         super().__init__()
 
-    def __attrs_post_init__(self):
+        self.model_name_or_path = model_name_or_path
+        self.task_name = task_name
+        self.pad_to_max_length = pad_to_max_length
+        self.max_length = max_length
+        self.train_batch_size = train_batch_size
+        self.eval_batch_size = eval_batch_size
+        self.num_workers = num_workers
+        self.use_fast_tokenizer = use_fast_tokenizer
+        self.use_fp16 = use_fp16
+
+        self.save_hyperparameters(ignore=["num_workers", "data_path"])
+
+        self.id = sha256(self.hparams)
+        self.path = Path(data_path) / "glue" / self.id
+
         self.text_keys = GLUE_TASK_TO_KEYS[self.task_name]
+        self.num_labels = GLUE_TASK_NUM_LABELS[self.task_name]
         self.is_regression = self.task_name == "stsb"
-        self.num_labels = (
-            1 if self.is_regression else GLUE_TASK_NUM_LABELS[self.task_name]
+
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            self.model_name_or_path, use_fast=self.use_fast_tokenizer
         )
 
         if self.pad_to_max_length:
@@ -129,53 +104,42 @@ class GLUEDataModule(L.LightningDataModule):
             )
 
     def prepare_data(self) -> None:
-        AutoTokenizer.from_pretrained(
-            self.model_name_or_path, use_fast=self.use_fast_tokenizer
-        )
-        dataset = datasets.load_dataset("glue", self.task_name)
-        dataset.map(
-            self.preprocess_function,
-            batched=True,
-            num_proc=self.num_workers,
-            remove_columns=dataset["train"].column_names,
-        )
+        try:
+            DatasetDict.load_from_disk(self.path)
+        except FileNotFoundError:
+            dataset = datasets.load_dataset("glue", self.task_name)
+            dataset = dataset.map(
+                self.preprocess_function,
+                batched=True,
+                num_proc=self.num_workers,
+                remove_columns=dataset["train"].column_names,
+            )
 
-    def setup(self, stage: str) -> None:
-        self.tokenizer = AutoTokenizer.from_pretrained(
-            self.model_name_or_path, use_fast=self.use_fast_tokenizer
-        )
-        self.dataset = datasets.load_dataset("glue", self.task_name)
+            dataset.save_to_disk(self.path)
 
-        # Hopefully Huggingface cache won't recompute this
-        self.dataset = self.dataset.map(
-            self.preprocess_function,
-            batched=True,
-            remove_columns=self.dataset["train"].column_names,
-            load_from_cache_file=True,
-        )
+    def setup(self, stage: str = None) -> None:
+        dataset = DatasetDict.load_from_disk(self.path)
 
-        self.train_dataset = self.dataset["train"]
-        self.eval_dataset = self.dataset[
+        self.train_dataset = dataset["train"]
+        self.val_dataset = dataset[
             "validation_matched" if self.task_name == "mnli" else "validation"
         ]
 
-    def preprocess_function(self, examples: dict[str, list]) -> BatchEncoding:
+    def preprocess_function(self, examples: dict[str, Any]) -> BatchEncoding:
         # Either encode single sentence or sentence pairs
         if len(self.text_keys) > 1:
-            texts = list(
-                zip(
-                    examples[self.text_keys[0]],
-                    examples[self.text_keys[1]],
-                )
+            texts = (
+                examples[self.text_keys[0]],
+                examples[self.text_keys[1]],
             )
         else:
-            texts = examples[self.text_keys[0]]
+            texts = (examples[self.text_keys[0]],)
 
         padding = "max_length" if self.pad_to_max_length else False
-        result = self.tokenizer.batch_encode_plus(
+        result = self.tokenizer(
             *texts,
-            max_length=self.max_seq_length,
             padding=padding,
+            max_length=self.max_length,
             truncation=True,
         )
 
@@ -195,7 +159,7 @@ class GLUEDataModule(L.LightningDataModule):
 
     def val_dataloader(self) -> DataLoader:
         return DataLoader(
-            self.eval_dataset,
+            self.val_dataset,
             batch_size=self.eval_batch_size,
             collate_fn=self.data_collator,
             num_workers=self.num_workers,
