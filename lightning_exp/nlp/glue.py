@@ -62,14 +62,13 @@ class GLUEModel(L.LightningModule):
         self.model = AutoModelForSequenceClassification.from_pretrained(
             self.model_name_or_path, config=self.config
         )
-        self.train_metric = evaluate.load(
+        self.metric = evaluate.load(
             "glue",
             self.task_name,
         )
-        self.val_metric = evaluate.load(
-            "glue",
-            self.task_name,
-        )
+
+        self.val_predictions = []
+        self.val_labels = []
 
     def forward(self, **inputs):
         return self.model(**inputs)
@@ -89,14 +88,20 @@ class GLUEModel(L.LightningModule):
         else:
             predictions = logits.squeeze()
 
-        self.val_metric.add_batch(predictions=predictions, references=batch["labels"])
+        self.val_predictions.append(predictions)
+        self.val_labels.append(batch["labels"])
 
         self.log("val_loss", val_loss, on_epoch=True, prog_bar=True, sync_dist=True)
 
         return {"loss": val_loss, "predictions": predictions, "labels": batch["labels"]}
 
     def on_validation_epoch_end(self) -> None:
-        self.log_dict(self.val_metric.compute(), prog_bar=True)
+        predictions = self.all_gather(self.val_predictions)
+        labels = self.all_gather(self.val_labels)
+
+        result = self.metric.compute(predictions=predictions, references=labels)
+
+        self.log_dict(result)
 
     # def validation_epoch_end(self, outputs):
     #     preds = torch.cat([x["preds"] for x in outputs])
@@ -183,7 +188,6 @@ def main():
                 filename="{epoch:02d}-{val_loss:.2f}",
             ),
             Timer(),
-            TQDMProgressBar(),
         ],
         # fast_dev_run=True,
         # limit_train_batches=0.1,
