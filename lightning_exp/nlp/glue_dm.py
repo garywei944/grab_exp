@@ -66,12 +66,14 @@ class GLUEDataModule(L.LightningDataModule):
         max_length: int = 128,
         train_batch_size: int = 128,
         eval_batch_size: int = 1024,
-        num_workers: int = 4,
+        num_workers: int = min(os.cpu_count(), 4),
         use_fast_tokenizer: bool = True,
         use_fp16: bool = False,
         data_path: str = "data/processed",
     ):
         super().__init__()
+
+        print("dm init")
 
         self.model_name_or_path = model_name_or_path
         self.task_name = task_name
@@ -104,21 +106,26 @@ class GLUEDataModule(L.LightningDataModule):
             )
 
     def prepare_data(self) -> None:
+        print("dm prepare data")
         try:
-            DatasetDict.load_from_disk(self.path)
+            print("dm load from disk")
+            datasets.load_from_disk(self.path)
+            print("dm loaded from disk")
         except FileNotFoundError:
+            print("dm not found")
             dataset = datasets.load_dataset("glue", self.task_name)
             dataset = dataset.map(
                 self.preprocess_function,
                 batched=True,
-                num_proc=self.num_workers,
+                # num_proc=self.num_workers,
                 remove_columns=dataset["train"].column_names,
             )
 
             dataset.save_to_disk(self.path)
 
     def setup(self, stage: str = None) -> None:
-        dataset = DatasetDict.load_from_disk(self.path)
+        print("dm setup")
+        dataset = datasets.load_from_disk(self.path)
 
         self.train_dataset = dataset["train"]
         self.val_dataset = dataset[
@@ -149,6 +156,7 @@ class GLUEDataModule(L.LightningDataModule):
         return result
 
     def train_dataloader(self) -> DataLoader:
+        print("dm train dataloader")
         return DataLoader(
             self.train_dataset,
             batch_size=self.train_batch_size,

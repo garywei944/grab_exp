@@ -1,6 +1,13 @@
 import lightning as L
 from lightning.pytorch.cli import LightningCLI, LightningArgumentParser
-from lightning.pytorch.loggers import TensorBoardLogger, WandbLogger
+from lightning.pytorch.loggers import TensorBoardLogger, WandbLogger, CSVLogger
+from lightning.pytorch.callbacks import (
+    EarlyStopping,
+    ModelCheckpoint,
+    Timer,
+    TQDMProgressBar,
+)
+from lightning.pytorch.plugins.environments import SLURMEnvironment
 import torch
 from torch import nn, Tensor
 from torch_optimizer import Adafactor
@@ -70,7 +77,7 @@ class GLUEModel(L.LightningModule):
     def training_step(self, batch, batch_idx):
         outputs = self(**batch)
         loss = outputs.loss
-        self.log("train_loss", loss, on_epoch=True, prog_bar=True)
+        self.log("train_loss", loss, on_epoch=True, prog_bar=True, sync_dist=True)
         return loss
 
     def validation_step(self, batch, batch_idx):
@@ -84,7 +91,7 @@ class GLUEModel(L.LightningModule):
 
         self.val_metric.add_batch(predictions=predictions, references=batch["labels"])
 
-        self.log("val_loss", val_loss, on_epoch=True, prog_bar=True)
+        self.log("val_loss", val_loss, on_epoch=True, prog_bar=True, sync_dist=True)
 
         return {"loss": val_loss, "predictions": predictions, "labels": batch["labels"]}
 
@@ -146,9 +153,9 @@ def main():
 
     L.seed_everything(42)
 
-    dm = GLUEDataModule(MODEL_NAME, TASK_NAME)
-    dm.prepare_data()
-    dm.setup()
+    dm = GLUEDataModule(MODEL_NAME, TASK_NAME, train_batch_size=32, num_workers=3)
+    # dm.prepare_data()
+    # dm.setup()
 
     model = GLUEModel(MODEL_NAME, num_labels=dm.num_labels, task_name=TASK_NAME)
 
@@ -156,27 +163,31 @@ def main():
     #
     trainer = L.Trainer(
         max_steps=250_000,
-        check_val_every_n_epoch=None,
-        val_check_interval=1000,
+        check_val_every_n_epoch=1,
+        # val_check_interval=1000,
         logger=[
             TensorBoardLogger("lightning_logs", name=MODEL_NAME),
-            WandbLogger(
-                project="t5-glue",
-                entity="grab",
-                mode="offline",
-            ),
+            # WandbLogger(
+            #     project="t5-glue",
+            #     entity="grab",
+            #     mode="online",
+            # ),
+            CSVLogger("logs", name=MODEL_NAME),
         ],
         callbacks=[
-            # L.pytorch.callbacks.EarlyStopping(monitor="val_loss"),
-            L.pytorch.callbacks.ModelCheckpoint(
-                monitor="f1",
+            # EarlyStopping(monitor="val_loss"),
+            ModelCheckpoint(
+                monitor="matthews_correlation",
                 save_top_k=1,
                 save_last=True,
                 filename="{epoch:02d}-{val_loss:.2f}",
             ),
-            L.pytorch.callbacks.Timer(),
+            Timer(),
+            TQDMProgressBar(),
         ],
         # fast_dev_run=True,
+        # limit_train_batches=0.1,
+        # plugins=[SLURMEnvironment(auto_requeue=False)],
     )
     trainer.fit(model, datamodule=dm)
     # trainer.fit(cli.model, datamodule=cli.datamodule)

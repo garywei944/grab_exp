@@ -64,6 +64,7 @@ dependencies:
   - evaluate~=0.4.0
   - tokenizers>=0.13.1 # https://stackoverflow.com/a/74386742
   - peft~=0.7.1
+  - sentencepiece~=0.1.99
 
   # Lightning
   - lightning~=2.1.3
