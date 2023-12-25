@@ -15,7 +15,6 @@ from torch.utils.data import DataLoader
 from attrs import define
 from dataclasses import dataclass
 from pathlib import Path
-import os
 from dict_hash import sha256
 
 GLUE_TASK_TO_KEYS = {
@@ -56,7 +55,7 @@ GLUE_COLUMNS = [
 
 class GLUEDataModule(L.LightningDataModule):
     train_dataset: Dataset
-    val_dataset: Dataset
+    val_dataset: Dataset | list[Dataset]
 
     def __init__(
         self,
@@ -66,14 +65,13 @@ class GLUEDataModule(L.LightningDataModule):
         max_length: int = 128,
         train_batch_size: int = 128,
         eval_batch_size: int = 1024,
-        num_workers: int = min(os.cpu_count(), 4),
+        num_workers: int = 1,
         use_fast_tokenizer: bool = True,
         use_fp16: bool = False,
         data_path: str = "data/processed",
+        load_from_disk: bool = True,
     ):
         super().__init__()
-
-        print("dm init")
 
         self.model_name_or_path = model_name_or_path
         self.task_name = task_name
@@ -84,8 +82,9 @@ class GLUEDataModule(L.LightningDataModule):
         self.num_workers = num_workers
         self.use_fast_tokenizer = use_fast_tokenizer
         self.use_fp16 = use_fp16
+        self.load_from_disk = load_from_disk
 
-        self.save_hyperparameters(ignore=["num_workers", "data_path"])
+        self.save_hyperparameters(ignore=["num_workers", "data_path", "load_from_disk"])
 
         self.id = sha256(self.hparams)
         self.path = Path(data_path) / "glue" / self.id
@@ -106,13 +105,11 @@ class GLUEDataModule(L.LightningDataModule):
             )
 
     def prepare_data(self) -> None:
-        print("dm prepare data")
         try:
-            print("dm load from disk")
+            if not self.load_from_disk:
+                raise FileNotFoundError
             datasets.load_from_disk(self.path)
-            print("dm loaded from disk")
         except FileNotFoundError:
-            print("dm not found")
             dataset = datasets.load_dataset("glue", self.task_name)
             dataset = dataset.map(
                 self.preprocess_function,
@@ -124,13 +121,17 @@ class GLUEDataModule(L.LightningDataModule):
             dataset.save_to_disk(self.path)
 
     def setup(self, stage: str = None) -> None:
-        print("dm setup")
-        dataset = datasets.load_from_disk(self.path)
+        dataset: DatasetDict = datasets.load_from_disk(self.path)
 
         self.train_dataset = dataset["train"]
-        self.val_dataset = dataset[
-            "validation_matched" if self.task_name == "mnli" else "validation"
-        ]
+
+        if self.task_name == "mnli":
+            self.val_dataset = [
+                dataset["validation_matched"],
+                dataset["validation_mismatched"],
+            ]
+        else:
+            self.val_dataset = dataset["validation"]
 
     def preprocess_function(self, examples: dict[str, Any]) -> BatchEncoding:
         # Either encode single sentence or sentence pairs
@@ -156,7 +157,6 @@ class GLUEDataModule(L.LightningDataModule):
         return result
 
     def train_dataloader(self) -> DataLoader:
-        print("dm train dataloader")
         return DataLoader(
             self.train_dataset,
             batch_size=self.train_batch_size,
@@ -165,13 +165,24 @@ class GLUEDataModule(L.LightningDataModule):
             shuffle=True,
         )
 
-    def val_dataloader(self) -> DataLoader:
-        return DataLoader(
-            self.val_dataset,
-            batch_size=self.eval_batch_size,
-            collate_fn=self.data_collator,
-            num_workers=self.num_workers,
-        )
+    def val_dataloader(self) -> DataLoader | list[DataLoader]:
+        if self.task_name == "mnli":
+            return [
+                DataLoader(
+                    e,
+                    batch_size=self.eval_batch_size,
+                    collate_fn=self.data_collator,
+                    num_workers=self.num_workers,
+                )
+                for e in self.val_dataset
+            ]
+        else:
+            return DataLoader(
+                self.val_dataset,
+                batch_size=self.eval_batch_size,
+                collate_fn=self.data_collator,
+                num_workers=self.num_workers,
+            )
 
 
 if __name__ == "__main__":

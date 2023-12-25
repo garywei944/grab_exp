@@ -1,3 +1,4 @@
+from collections import defaultdict
 import lightning as L
 from lightning.pytorch.cli import LightningCLI, LightningArgumentParser
 from lightning.pytorch.loggers import TensorBoardLogger, WandbLogger, CSVLogger
@@ -11,14 +12,16 @@ from lightning.pytorch.plugins.environments import SLURMEnvironment
 import torch
 from torch import nn, Tensor
 from torch_optimizer import Adafactor
+from traitlets import default
 
 from transformers import AutoConfig, AutoModelForSequenceClassification
 import evaluate
 
 import os
 from pathlib import Path
+from collections import defaultdict
 
-from glue_dm import GLUEDataModule
+from glue_dm import GLUEDataModule, GLUE_TASK_NUM_LABELS
 
 from cd2root import cd2root
 
@@ -29,10 +32,6 @@ class CLI(LightningCLI):
     def add_arguments_to_parser(self, parser: LightningArgumentParser) -> None:
         parser.link_arguments("model.model_name_or_path", "data.model_name_or_path")
         parser.link_arguments("model.task_name", "data.task_name")
-        parser.link_arguments(
-            "model.num_labels", "data.num_labels", apply_on="instantiate"
-        )
-        ...
 
 
 class GLUEModel(L.LightningModule):
@@ -40,19 +39,19 @@ class GLUEModel(L.LightningModule):
         self,
         model_name_or_path: str,
         task_name: str,
-        num_labels: int,
         learning_rate: float = 1e-3,
         weight_decay: float = 0.0,
     ):
         super().__init__()
 
         self.model_name_or_path = model_name_or_path
-        self.num_labels = num_labels
         self.task_name = task_name
         self.learning_rate = learning_rate
         self.weight_decay = weight_decay
 
         self.save_hyperparameters()
+
+        self.num_labels = GLUE_TASK_NUM_LABELS[self.task_name]
 
         self.config = AutoConfig.from_pretrained(
             self.model_name_or_path,
@@ -67,8 +66,8 @@ class GLUEModel(L.LightningModule):
             self.task_name,
         )
 
-        self.val_predictions = []
-        self.val_labels = []
+        self.val_predictions = defaultdict(list)
+        self.val_labels = defaultdict(list)
 
     def forward(self, **inputs):
         return self.model(**inputs)
@@ -79,7 +78,7 @@ class GLUEModel(L.LightningModule):
         self.log("train_loss", loss, on_epoch=True, prog_bar=True, sync_dist=True)
         return loss
 
-    def validation_step(self, batch, batch_idx):
+    def validation_step(self, batch, batch_idx, dataloader_idx=0):
         outputs = self(**batch)
         val_loss, logits = outputs[:2]
 
@@ -88,32 +87,32 @@ class GLUEModel(L.LightningModule):
         else:
             predictions = logits.squeeze()
 
-        self.val_predictions.append(predictions)
-        self.val_labels.append(batch["labels"])
+        self.val_predictions[dataloader_idx].append(predictions)
+        self.val_labels[dataloader_idx].append(batch["labels"])
 
         self.log("val_loss", val_loss, on_epoch=True, prog_bar=True, sync_dist=True)
 
         return {"loss": val_loss, "predictions": predictions, "labels": batch["labels"]}
 
     def on_validation_epoch_end(self) -> None:
-        predictions = self.all_gather(self.val_predictions)
-        labels = self.all_gather(self.val_labels)
+        n_val = len(self.val_predictions)
 
-        result = self.metric.compute(predictions=predictions, references=labels)
+        for idx in range(n_val):
+            predictions = torch.cat(self.val_predictions[idx]).flatten()
+            labels = torch.cat(self.val_labels[idx]).flatten()
 
-        self.log_dict(result)
+            predictions = self.all_gather(predictions).flatten()
+            labels = self.all_gather(labels).flatten()
 
-    # def validation_epoch_end(self, outputs):
-    #     preds = torch.cat([x["preds"] for x in outputs])
-    #     labels = torch.cat([x["labels"] for x in outputs])
-    #     loss = torch.stack([x["loss"] for x in outputs]).mean()
-    #
-    #     self.log("val_loss", loss, prog_bar=True, on_epoch=True)
-    #
-    #     result = self.metric.compute(predictions=preds, references=labels)
-    #     self.log_dict(result)
-    #
-    #     return loss
+            self.val_predictions[idx].clear()
+            self.val_labels[idx].clear()
+
+            results = self.metric.compute(predictions=predictions, references=labels)
+
+            if n_val > 1:
+                results = {f"{k}/{idx}": v for k, v in results.items()}
+
+            self.log_dict(results, prog_bar=True, rank_zero_only=True)
 
     def configure_optimizers(self):
         no_decay = ["bias", "LayerNorm.weight"]
@@ -153,48 +152,46 @@ def main():
     #
     # print(args)
 
-    MODEL_NAME = "google/t5-v1_1-small"
-    TASK_NAME = "cola"
+    # MODEL_NAME = "google/t5-v1_1-small"
+    # TASK_NAME = "mnli"
 
-    L.seed_everything(42)
+    # L.seed_everything(42)
 
-    dm = GLUEDataModule(MODEL_NAME, TASK_NAME, train_batch_size=32, num_workers=3)
-    # dm.prepare_data()
-    # dm.setup()
+    # dm = GLUEDataModule(
+    #     MODEL_NAME, TASK_NAME, train_batch_size=32, num_workers=4, load_from_disk=True
+    # )
+    # # dm.prepare_data()
+    # # dm.setup()
 
-    model = GLUEModel(MODEL_NAME, num_labels=dm.num_labels, task_name=TASK_NAME)
+    # model = GLUEModel(MODEL_NAME, num_labels=dm.num_labels, task_name=TASK_NAME)
 
-    # cli = CLI(GLUEModel, GLUEDataModule, run=False)
-    #
+    cli = CLI(GLUEModel, GLUEDataModule, run=False)
+
     trainer = L.Trainer(
         max_steps=250_000,
-        check_val_every_n_epoch=1,
-        # val_check_interval=1000,
+        check_val_every_n_epoch=None,
+        val_check_interval=1000,
         logger=[
-            TensorBoardLogger("lightning_logs", name=MODEL_NAME),
-            # WandbLogger(
-            #     project="t5-glue",
-            #     entity="grab",
-            #     mode="online",
-            # ),
-            CSVLogger("logs", name=MODEL_NAME),
+            TensorBoardLogger("lightning_logs", name=cli.config["model_name_or_path"]),
+            WandbLogger(
+                project=f"t5-glue-{cli.config['task_name']}",
+                entity="grab",
+                mode="online",
+            ),
+            CSVLogger("logs", name=cli.config["model_name_or_path"]),
         ],
         callbacks=[
             # EarlyStopping(monitor="val_loss"),
-            ModelCheckpoint(
-                monitor="matthews_correlation",
-                save_top_k=1,
-                save_last=True,
-                filename="{epoch:02d}-{val_loss:.2f}",
-            ),
+            # ModelCheckpoint(
+            #     monitor="matthews_correlation",
+            # ),
             Timer(),
         ],
         # fast_dev_run=True,
-        # limit_train_batches=0.1,
+        # limit_train_batches=0.01,
         # plugins=[SLURMEnvironment(auto_requeue=False)],
     )
-    trainer.fit(model, datamodule=dm)
-    # trainer.fit(cli.model, datamodule=cli.datamodule)
+    trainer.fit(cli.model, datamodule=cli.datamodule)
 
 
 if __name__ == "__main__":
