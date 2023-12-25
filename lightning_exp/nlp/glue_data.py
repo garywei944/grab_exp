@@ -14,6 +14,11 @@ from torch.utils.data import DataLoader
 from pathlib import Path
 from dict_hash import sha256
 
+import os
+
+# Disable tokenizers parallelism warning
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
 
 GLUE_TASK_TO_KEYS = {
     "cola": ("sentence",),

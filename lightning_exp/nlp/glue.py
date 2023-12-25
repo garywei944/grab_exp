@@ -8,7 +8,7 @@ from lightning.pytorch.callbacks import (
     TQDMProgressBar,
 )
 import torch
-from torch_optimizer import Adafactor
+from transformers.optimization import Adafactor
 
 from transformers import AutoConfig, AutoModelForSequenceClassification
 import evaluate
@@ -23,7 +23,7 @@ cd2root()
 
 
 class GLUEModel(L.LightningModule):
-    def __post_init__(
+    def __init__(
         self,
         model_name_or_path: str,
         task_name: str,
@@ -103,6 +103,8 @@ class GLUEModel(L.LightningModule):
             self.log_dict(results, prog_bar=True, rank_zero_only=True)
 
     def configure_optimizers(self):
+        # T5 hyperparameter from Google paper and
+        # https://discuss.huggingface.co/t/t5-finetuning-tips/684/36
         no_decay = ["bias", "LayerNorm.weight"]
         optimizer_grouped_parameters = [
             {
@@ -126,9 +128,8 @@ class GLUEModel(L.LightningModule):
             optimizer_grouped_parameters,
             lr=self.learning_rate,
             relative_step=False,
+            scale_parameter=False,
             warmup_init=False,
-            clip_threshold=1.0,
-            scale_parameter=True,
         )
 
 
@@ -171,7 +172,7 @@ def main():
             WandbLogger(
                 project=f"t5-glue-{task_name}",
                 entity="grab",
-                mode="online",
+                mode="offline",
             ),
             CSVLogger("logs", name=model_name),
         ],
