@@ -11,7 +11,6 @@ from transformers import (
 )
 from torch.utils.data import DataLoader
 
-from dataclasses import dataclass, field
 from pathlib import Path
 from dict_hash import sha256
 
