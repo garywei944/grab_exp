@@ -1,7 +1,17 @@
 from torchvision import datasets
 
-cifar_trainset = datasets.CIFAR10(root="~/projects/grab_exp/data/external", train=True, download=True)
-data = cifar_trainset.data / 255  # data is numpy array
+# cifar_trainset = datasets.CIFAR10(
+#     root="~/projects/grab_exp/data/external", train=True, download=True
+# )
+# data = cifar_trainset.data / 255  # data is numpy array
+
+# MNIST
+data = (
+    datasets.MNIST(
+        root="~/projects/grab_exp/data/external", train=True, download=True
+    ).data
+    / 255
+)
 
 mean = data.mean(axis=(0, 1, 2))
 std = data.std(axis=(0, 1, 2))

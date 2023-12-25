@@ -1,6 +1,5 @@
-from collections import defaultdict
 import lightning as L
-from lightning.pytorch.cli import LightningCLI, LightningArgumentParser
+from lightning.pytorch.cli import LightningArgumentParser
 from lightning.pytorch.loggers import TensorBoardLogger, WandbLogger, CSVLogger
 from lightning.pytorch.callbacks import (
     EarlyStopping,
@@ -8,46 +7,31 @@ from lightning.pytorch.callbacks import (
     Timer,
     TQDMProgressBar,
 )
-from lightning.pytorch.plugins.environments import SLURMEnvironment
 import torch
-from torch import nn, Tensor
 from torch_optimizer import Adafactor
-from traitlets import default
 
 from transformers import AutoConfig, AutoModelForSequenceClassification
 import evaluate
 
-import os
-from pathlib import Path
 from collections import defaultdict
+from dataclasses import dataclass, field
 
-from glue_dm import GLUEDataModule, GLUE_TASK_NUM_LABELS
+from glue_data import GLUEDataModule, GLUE_TASK_NUM_LABELS
 
 from cd2root import cd2root
 
 cd2root()
 
 
-class CLI(LightningCLI):
-    def add_arguments_to_parser(self, parser: LightningArgumentParser) -> None:
-        parser.link_arguments("model.model_name_or_path", "data.model_name_or_path")
-        parser.link_arguments("model.task_name", "data.task_name")
-
-
+@dataclass
 class GLUEModel(L.LightningModule):
-    def __init__(
-        self,
-        model_name_or_path: str,
-        task_name: str,
-        learning_rate: float = 1e-3,
-        weight_decay: float = 0.0,
-    ):
-        super().__init__()
+    model_name_or_path: str
+    task_name: str
+    learning_rate: float = 1e-3
+    weight_decay: float = 0.0
 
-        self.model_name_or_path = model_name_or_path
-        self.task_name = task_name
-        self.learning_rate = learning_rate
-        self.weight_decay = weight_decay
+    def __post_init__(self):
+        super().__init__()
 
         self.save_hyperparameters()
 
@@ -144,41 +128,48 @@ class GLUEModel(L.LightningModule):
         )
 
 
+def parse_args():
+    parser = LightningArgumentParser()
+    parser.add_argument("-s", "--seed", type=int, default=42)
+    parser.add_argument("-T", "--max_steps", type=int, default=250_000)
+    parser.add_argument(
+        "-vi",
+        "--val_interval",
+        type=int,
+        default=1000,
+    )
+
+    parser.add_lightning_class_args(GLUEDataModule, "data")
+    parser.add_lightning_class_args(GLUEModel, "model")
+    parser.link_arguments("model.model_name_or_path", "data.model_name_or_path")
+    parser.link_arguments("model.task_name", "data.task_name")
+
+    return parser.parse_args()
+
+
 def main():
-    # from datargs import parse, make_parser
-    #
-    # parser = make_parser(GLUEDataModule)
-    # args = parser.parse_args()
-    #
-    # print(args)
+    args = parse_args()
 
-    # MODEL_NAME = "google/t5-v1_1-small"
-    # TASK_NAME = "mnli"
+    model_name = args.model.model_name_or_path
+    task_name = args.model.task_name
 
-    # L.seed_everything(42)
+    L.seed_everything(args.seed)
 
-    # dm = GLUEDataModule(
-    #     MODEL_NAME, TASK_NAME, train_batch_size=32, num_workers=4, load_from_disk=True
-    # )
-    # # dm.prepare_data()
-    # # dm.setup()
-
-    # model = GLUEModel(MODEL_NAME, num_labels=dm.num_labels, task_name=TASK_NAME)
-
-    cli = CLI(GLUEModel, GLUEDataModule, run=False)
+    model = GLUEModel(**vars(args.model))
+    dm = GLUEDataModule(**vars(args.data))
 
     trainer = L.Trainer(
-        max_steps=250_000,
+        max_steps=args.max_steps,
         check_val_every_n_epoch=None,
-        val_check_interval=1000,
+        val_check_interval=args.val_interval,
         logger=[
-            TensorBoardLogger("lightning_logs", name=cli.config["model_name_or_path"]),
+            TensorBoardLogger("lightning_logs", name=model_name),
             WandbLogger(
-                project=f"t5-glue-{cli.config['task_name']}",
+                project=f"t5-glue-{task_name}",
                 entity="grab",
                 mode="online",
             ),
-            CSVLogger("logs", name=cli.config["model_name_or_path"]),
+            CSVLogger("logs", name=model_name),
         ],
         callbacks=[
             # EarlyStopping(monitor="val_loss"),
@@ -191,7 +182,7 @@ def main():
         # limit_train_batches=0.01,
         # plugins=[SLURMEnvironment(auto_requeue=False)],
     )
-    trainer.fit(cli.model, datamodule=cli.datamodule)
+    trainer.fit(model, datamodule=dm)
 
 
 if __name__ == "__main__":
