@@ -14,7 +14,6 @@ from transformers import AutoConfig, AutoModelForSequenceClassification
 import evaluate
 
 from collections import defaultdict
-from dataclasses import dataclass, field
 
 from glue_data import GLUEDataModule, GLUE_TASK_NUM_LABELS
 
@@ -23,15 +22,20 @@ from cd2root import cd2root
 cd2root()
 
 
-@dataclass
 class GLUEModel(L.LightningModule):
-    model_name_or_path: str
-    task_name: str
-    learning_rate: float = 1e-3
-    weight_decay: float = 0.0
-
-    def __post_init__(self):
+    def __post_init__(
+        self,
+        model_name_or_path: str,
+        task_name: str,
+        learning_rate: float = 1e-3,
+        weight_decay: float = 0.0,
+    ):
         super().__init__()
+
+        self.model_name_or_path = model_name_or_path
+        self.task_name = task_name
+        self.learning_rate = learning_rate
+        self.weight_decay = weight_decay
 
         self.save_hyperparameters()
 

@@ -52,28 +52,38 @@ GLUE_COLUMNS = [
 ]
 
 
-@dataclass
 class GLUEDataModule(L.LightningDataModule):
-    model_name_or_path: str
-    task_name: str
-    pad_to_max_length: bool = True
-    max_length: int = 128
-    train_batch_size: int = 128
-    eval_batch_size: int = 1024
-    num_workers: int = 1
-    use_fast_tokenizer: bool = True
-    use_fp16: bool = False
-
-    data_path: str = "data/processed"
-    load_from_disk: bool = True
-
-    def __post_init__(self):
+    def __init__(
+        self,
+        model_name_or_path: str,
+        task_name: str,
+        pad_to_max_length: bool = True,
+        max_length: int = 128,
+        train_batch_size: int = 128,
+        eval_batch_size: int = 1024,
+        num_workers: int = 1,
+        use_fast_tokenizer: bool = True,
+        use_fp16: bool = False,
+        data_path: str = "data/processed",
+        load_from_disk: bool = True,
+    ):
         super().__init__()
+
+        self.model_name_or_path = model_name_or_path
+        self.task_name = task_name
+        self.pad_to_max_length = pad_to_max_length
+        self.max_length = max_length
+        self.train_batch_size = train_batch_size
+        self.eval_batch_size = eval_batch_size
+        self.num_workers = num_workers
+        self.use_fast_tokenizer = use_fast_tokenizer
+        self.use_fp16 = use_fp16
+        self.load_from_disk = load_from_disk
 
         self.save_hyperparameters(ignore=["num_workers", "data_path", "load_from_disk"])
 
         self.id = sha256(self.hparams)  # important to load cached processed data
-        self.path = Path(self.data_path) / "glue" / self.id
+        self.path = Path(data_path) / "glue" / self.id
 
         self.text_keys = GLUE_TASK_TO_KEYS[self.task_name]
         self.num_labels = GLUE_TASK_NUM_LABELS[self.task_name]
