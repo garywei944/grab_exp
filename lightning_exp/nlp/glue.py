@@ -6,7 +6,7 @@ from lightning.pytorch.callbacks import (
     ModelCheckpoint,
     Timer,
     TQDMProgressBar,
-    LearningRateMonitor
+    LearningRateMonitor,
 )
 from lightning.pytorch.profilers import PyTorchProfiler
 import torch
@@ -136,22 +136,24 @@ class GLUEModel(L.LightningModule):
         # T5 hyperparameter from Google paper and
         # https://discuss.huggingface.co/t/t5-finetuning-tips/684/36
         optimizer = Adafactor(
-            self.model.parameters(),
+            optimizer_grouped_parameters,
             lr=self.learning_rate,
             relative_step=False,
             scale_parameter=False,
             warmup_init=False,
         )
-        scheduler = get_scheduler(
-            "linear",
-            optimizer=optimizer,
-            num_warmup_steps=self.warmup_steps,
-            num_training_steps=self.trainer.max_steps,
-        )
-        return {
-            "optimizer": optimizer,
-            "lr_scheduler": scheduler,
-        }
+        # scheduler = get_scheduler(
+        #     "linear",
+        #     optimizer=optimizer,
+        #     num_warmup_steps=self.warmup_steps,
+        #     num_training_steps=self.trainer.max_steps,
+        # )
+        # return {
+        #     "optimizer": optimizer,
+        #     "lr_scheduler": scheduler,
+        # }
+
+        return optimizer
 
 
 def parse_args():

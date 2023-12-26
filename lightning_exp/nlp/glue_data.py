@@ -1,3 +1,4 @@
+from re import T
 from typing import Any
 
 import lightning as L
@@ -74,7 +75,6 @@ class GLUEDataModule(L.LightningDataModule):
         data_path: str = "data/processed",
         load_from_disk: bool = True,
         add_task_name: bool = True,
-        add_special: str | None = "</s>",
     ):
         super().__init__()
 
@@ -89,7 +89,6 @@ class GLUEDataModule(L.LightningDataModule):
         self.use_fp16 = use_fp16
         self.load_from_disk = load_from_disk
         self.add_task_name = add_task_name
-        self.add_special = add_special
 
         self.save_hyperparameters(ignore=["num_workers", "data_path", "load_from_disk"])
 
@@ -116,6 +115,7 @@ class GLUEDataModule(L.LightningDataModule):
             if not self.load_from_disk:
                 raise FileNotFoundError
             datasets.load_from_disk(self.path)
+            print(f"Loaded processed data from {self.path}")
         except FileNotFoundError:
             dataset = datasets.load_dataset("glue", self.task_name)
             dataset = dataset.map(
@@ -145,30 +145,26 @@ class GLUEDataModule(L.LightningDataModule):
         Prepare GLUE exactly follows Google T5 practice that add special tokens
         before trimming and padding.
         """
-        if self.add_task_name:
-            b = len(examples[self.text_keys[0]])
-
-            texts = []
-            for i in range(b):
-                if len(self.text_keys) > 1:
-                    k1, k2 = self.text_keys
-                    texts.append(
-                        f"{self.task_name} {k1}: {examples[k1][i]}"
-                        f" {k2}: {examples[k2][i]} {self.add_special}"
-                    )
-                else:
-                    k = self.text_keys[0]
-                    texts.append(
-                        f"{self.task_name} {k}: {examples[k][i]} {self.add_special}"
-                    )
-            texts = [texts]
-        elif len(self.text_keys) > 1:
+        if len(self.text_keys) > 1:
+            k1, k2 = self.text_keys
             texts = (
-                examples[self.text_keys[0]],
-                examples[self.text_keys[1]],
+                (
+                    examples[k1],
+                    examples[k2],
+                )
+                if not self.add_task_name
+                else (
+                    [f"{self.task_name} {k1}: {s}" for s in examples[k1]],
+                    [f"{k2}: {s}" for s in examples[k2]],
+                )
             )
         else:
-            texts = (examples[self.text_keys[0]],)
+            k = self.text_keys[0]
+            texts = (
+                (examples[k],)
+                if not self.add_task_name
+                else ([f"{self.task_name} {k}: {s}" for s in examples[k]],)
+            )
 
         padding = "max_length" if self.pad_to_max_length else False
         result = self.tokenizer(
