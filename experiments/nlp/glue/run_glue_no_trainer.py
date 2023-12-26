@@ -49,6 +49,8 @@ from transformers.utils.versions import require_version
 
 from transformers.optimization import Adafactor, AdafactorSchedule
 
+import wandb
+
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
 check_min_version("4.36.0")
 
@@ -519,28 +521,28 @@ def main():
 
     # Optimizer
     # Split weights in two groups, one with weight decay and the other not.
-    no_decay = ["bias", "LayerNorm.weight"]
-    optimizer_grouped_parameters = [
-        {
-            "params": [
-                p
-                for n, p in model.named_parameters()
-                if not any(nd in n for nd in no_decay)
-            ],
-            "weight_decay": args.weight_decay,
-        },
-        {
-            "params": [
-                p
-                for n, p in model.named_parameters()
-                if any(nd in n for nd in no_decay)
-            ],
-            "weight_decay": 0.0,
-        },
-    ]
+    # no_decay = ["bias", "LayerNorm.weight"]
+    # optimizer_grouped_parameters = [
+    #     {
+    #         "params": [
+    #             p
+    #             for n, p in model.named_parameters()
+    #             if not any(nd in n for nd in no_decay)
+    #         ],
+    #         "weight_decay": args.weight_decay,
+    #     },
+    #     {
+    #         "params": [
+    #             p
+    #             for n, p in model.named_parameters()
+    #             if any(nd in n for nd in no_decay)
+    #         ],
+    #         "weight_decay": 0.0,
+    #     },
+    # ]
     # optimizer = torch.optim.AdamW(optimizer_grouped_parameters, lr=args.learning_rate)
     optimizer = Adafactor(
-        optimizer_grouped_parameters,
+        model.parameters(),
         lr=args.learning_rate,
         eps=(1e-30, 1e-3),
         clip_threshold=1.0,
@@ -567,10 +569,7 @@ def main():
     #     num_warmup_steps=args.num_warmup_steps,
     #     num_training_steps=args.max_train_steps,
     # )
-    lr_scheduler = AdafactorSchedule(
-        optimizer,
-        initial_lr=args.learning_rate
-    )
+    lr_scheduler = AdafactorSchedule(optimizer, initial_lr=args.learning_rate)
 
     # Prepare everything with our `accelerator`.
     (
@@ -605,7 +604,11 @@ def main():
         experiment_config["lr_scheduler_type"] = experiment_config[
             "lr_scheduler_type"
         ].value
-        accelerator.init_trackers("glue_no_trainer", experiment_config)
+        accelerator.init_trackers(
+            f"grab_glue_{args.task_name}",
+            experiment_config,
+            init_kwargs={"wandb": {"entity": "grab", "name": args.model_name_or_path}},
+        )
 
     # Get the metric function
     if args.task_name is not None:

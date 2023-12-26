@@ -108,6 +108,7 @@ dependencies:
       # https://github.com/Lightning-AI/pytorch-lightning/blob/master/requirements/pytorch/extra.txt
       - lightning[pytorch-extra]
       - lightning-gpt
+      - deepspeed
       - sourcery
       - torchopt~=0.7.2
       - torch_optimizer

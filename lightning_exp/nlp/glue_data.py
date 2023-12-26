@@ -114,7 +114,7 @@ class GLUEDataModule(L.LightningDataModule):
             dataset = dataset.map(
                 self.preprocess_function,
                 batched=True,
-                # num_proc=self.num_workers,
+                num_proc=self.num_workers,
                 remove_columns=dataset["train"].column_names,
             )
 
@@ -166,23 +166,16 @@ class GLUEDataModule(L.LightningDataModule):
         )
 
     def val_dataloader(self) -> DataLoader | list[DataLoader]:
-        if self.task_name == "mnli":
-            return [
-                DataLoader(
-                    e,
-                    batch_size=self.eval_batch_size,
-                    collate_fn=self.data_collator,
-                    num_workers=self.num_workers,
-                )
-                for e in self.val_dataset
-            ]
-        else:
-            return DataLoader(
-                self.val_dataset,
+        datasets = self.val_dataset if self.task_name == "mnli" else [self.val_dataset]
+        return [
+            DataLoader(
+                e,
                 batch_size=self.eval_batch_size,
                 collate_fn=self.data_collator,
                 num_workers=self.num_workers,
             )
+            for e in datasets
+        ]
 
 
 if __name__ == "__main__":

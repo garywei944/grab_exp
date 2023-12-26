@@ -3,14 +3,17 @@
 #SBATCH -o logs/glue/%j.out               # output file (%j expands to jobID)
 #SBATCH -e logs/glue/%j.err               # error log file (%j expands to jobID)
 #SBATCH -N 1                                 # Total number of nodes requested
-#SBATCH -n 18                                 # Total number of cores requested
+#SBATCH --ntasks-per-node 18                                 # Total number of cores requested
 #SBATCH --get-user-env                       # retrieve the users login environment
-#SBATCH --mem=120g                            # server memory requested (per node)
-#SBATCH -t 02-00:00:00                           # Time limit (hh:mm:ss)
+#SBATCH --mem=64G                            # server memory requested (per node)
+#SBATCH -t 01-00:00:00                           # Time limit (hh:mm:ss)
 #SBATCH --partition=gpu,desa                     # Request partition
-#SBATCH --gres=gpu:2080ti:4                # Type/number of GPUs needed
 
-CMD="python lightning_exp/nlp/glue.py $*"
+mkdir -p logs/glue
+
+CMD="$*"
 
 echo "$CMD"
 eval "$CMD"
+
+# SBATCH --gres=gpu:2080ti:4                # Type/number of GPUs needed

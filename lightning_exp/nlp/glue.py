@@ -7,6 +7,7 @@ from lightning.pytorch.callbacks import (
     Timer,
     TQDMProgressBar,
 )
+from lightning.pytorch.profilers import PyTorchProfiler
 import torch
 from transformers.optimization import Adafactor
 
@@ -54,8 +55,16 @@ class GLUEModel(L.LightningModule):
             self.task_name,
         )
 
-        self.val_predictions = defaultdict(list)
-        self.val_labels = defaultdict(list)
+        self.metric2 = (
+            evaluate.load(
+                "glue",
+                "mnli",
+            )
+            if self.task_name == "mnli"
+            else None
+        )
+
+        self.best = defaultdict(lambda: float("-inf"))
 
     def forward(self, **inputs):
         return self.model(**inputs)
@@ -75,57 +84,55 @@ class GLUEModel(L.LightningModule):
         else:
             predictions = logits.squeeze()
 
-        self.val_predictions[dataloader_idx].append(predictions)
-        self.val_labels[dataloader_idx].append(batch["labels"])
+        # Special handling for MNLI
+        metric = self.metric if dataloader_idx == 0 else self.metric2
+        metric.add_batch(
+            predictions=self.all_gather(predictions).flatten(),
+            references=self.all_gather(batch["labels"]).flatten(),
+        )
 
         self.log("val_loss", val_loss, on_epoch=True, prog_bar=True, sync_dist=True)
 
         return {"loss": val_loss, "predictions": predictions, "labels": batch["labels"]}
 
     def on_validation_epoch_end(self) -> None:
-        n_val = len(self.val_predictions)
+        self.log_dict(
+            self.metric.compute(),
+            prog_bar=True,
+        )
 
-        for idx in range(n_val):
-            predictions = torch.cat(self.val_predictions[idx]).flatten()
-            labels = torch.cat(self.val_labels[idx]).flatten()
-
-            predictions = self.all_gather(predictions).flatten()
-            labels = self.all_gather(labels).flatten()
-
-            self.val_predictions[idx].clear()
-            self.val_labels[idx].clear()
-
-            results = self.metric.compute(predictions=predictions, references=labels)
-
-            if n_val > 1:
-                results = {f"{k}/{idx}": v for k, v in results.items()}
-
-            self.log_dict(results, prog_bar=True, rank_zero_only=True)
+        if self.metric2 is not None:
+            results = self.metric2.compute()
+            results = {f"{k}/mm": v for k, v in results.items()}
+            self.log_dict(
+                results,
+                prog_bar=True,
+            )
 
     def configure_optimizers(self):
+        # no_decay = ["bias", "LayerNorm.weight"]
+        # optimizer_grouped_parameters = [
+        #     {
+        #         "params": [
+        #             p
+        #             for n, p in self.model.named_parameters()
+        #             if all(nd not in n for nd in no_decay)
+        #         ],
+        #         "weight_decay": self.weight_decay,
+        #     },
+        #     {
+        #         "params": [
+        #             p
+        #             for n, p in self.model.named_parameters()
+        #             if any(nd in n for nd in no_decay)
+        #         ],
+        #         "weight_decay": 0.0,
+        #     },
+        # ]
         # T5 hyperparameter from Google paper and
         # https://discuss.huggingface.co/t/t5-finetuning-tips/684/36
-        no_decay = ["bias", "LayerNorm.weight"]
-        optimizer_grouped_parameters = [
-            {
-                "params": [
-                    p
-                    for n, p in self.model.named_parameters()
-                    if all(nd not in n for nd in no_decay)
-                ],
-                "weight_decay": self.weight_decay,
-            },
-            {
-                "params": [
-                    p
-                    for n, p in self.model.named_parameters()
-                    if any(nd in n for nd in no_decay)
-                ],
-                "weight_decay": 0.0,
-            },
-        ]
         return Adafactor(
-            optimizer_grouped_parameters,
+            self.model.parameters(),
             lr=self.learning_rate,
             relative_step=False,
             scale_parameter=False,
@@ -136,12 +143,12 @@ class GLUEModel(L.LightningModule):
 def parse_args():
     parser = LightningArgumentParser()
     parser.add_argument("-s", "--seed", type=int, default=42)
-    parser.add_argument("-T", "--max_steps", type=int, default=250_000)
+    parser.add_argument("-T", "--max_steps", type=int, default=2500)
     parser.add_argument(
         "-vi",
         "--val_interval",
         type=int,
-        default=1000,
+        default=100,
     )
 
     parser.add_lightning_class_args(GLUEDataModule, "data")
@@ -163,6 +170,7 @@ def main():
     model = GLUEModel(**vars(args.model))
     dm = GLUEDataModule(**vars(args.data))
 
+    L.seed_everything(args.seed)
     trainer = L.Trainer(
         max_steps=args.max_steps,
         check_val_every_n_epoch=None,
@@ -171,8 +179,9 @@ def main():
             TensorBoardLogger("lightning_logs", name=model_name),
             WandbLogger(
                 project=f"t5-glue-{task_name}",
+                name=model_name,
                 entity="grab",
-                mode="offline",
+                mode="online",
             ),
             CSVLogger("logs", name=model_name),
         ],
@@ -183,8 +192,10 @@ def main():
             # ),
             Timer(),
         ],
+        enable_checkpointing=False,
+        profiler=PyTorchProfiler(),
         # fast_dev_run=True,
-        # limit_train_batches=0.01,
+        # limit_train_batches=0.1,
         # plugins=[SLURMEnvironment(auto_requeue=False)],
     )
     trainer.fit(model, datamodule=dm)
