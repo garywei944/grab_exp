@@ -57,6 +57,9 @@ GLUE_COLUMNS = [
 
 
 class GLUEDataModule(L.LightningDataModule):
+    train_dataset: Dataset
+    val_dataset: Dataset | list[Dataset]
+
     def __init__(
         self,
         model_name_or_path: str,
@@ -70,6 +73,8 @@ class GLUEDataModule(L.LightningDataModule):
         use_fp16: bool = False,
         data_path: str = "data/processed",
         load_from_disk: bool = True,
+        add_task_name: bool = True,
+        add_special: str | None = "</s>",
     ):
         super().__init__()
 
@@ -83,6 +88,8 @@ class GLUEDataModule(L.LightningDataModule):
         self.use_fast_tokenizer = use_fast_tokenizer
         self.use_fp16 = use_fp16
         self.load_from_disk = load_from_disk
+        self.add_task_name = add_task_name
+        self.add_special = add_special
 
         self.save_hyperparameters(ignore=["num_workers", "data_path", "load_from_disk"])
 
@@ -114,7 +121,7 @@ class GLUEDataModule(L.LightningDataModule):
             dataset = dataset.map(
                 self.preprocess_function,
                 batched=True,
-                num_proc=self.num_workers,
+                # num_proc=self.num_workers,
                 remove_columns=dataset["train"].column_names,
             )
 
@@ -134,8 +141,28 @@ class GLUEDataModule(L.LightningDataModule):
             self.val_dataset = dataset["validation"]
 
     def preprocess_function(self, examples: dict[str, Any]) -> BatchEncoding:
-        # Either encode single sentence or sentence pairs
-        if len(self.text_keys) > 1:
+        """
+        Prepare GLUE exactly follows Google T5 practice that add special tokens
+        before trimming and padding.
+        """
+        if self.add_task_name:
+            b = len(examples[self.text_keys[0]])
+
+            texts = []
+            for i in range(b):
+                if len(self.text_keys) > 1:
+                    k1, k2 = self.text_keys
+                    texts.append(
+                        f"{self.task_name} {k1}: {examples[k1][i]}"
+                        f" {k2}: {examples[k2][i]} {self.add_special}"
+                    )
+                else:
+                    k = self.text_keys[0]
+                    texts.append(
+                        f"{self.task_name} {k}: {examples[k][i]} {self.add_special}"
+                    )
+            texts = [texts]
+        elif len(self.text_keys) > 1:
             texts = (
                 examples[self.text_keys[0]],
                 examples[self.text_keys[1]],
@@ -179,7 +206,9 @@ class GLUEDataModule(L.LightningDataModule):
 
 
 if __name__ == "__main__":
-    obj = GLUEDataModule(model_name_or_path="bert-base-uncased", task_name="mrpc")
+    obj = GLUEDataModule(model_name_or_path="google/t5-v1_1-small", task_name="mrpc")
+
+    obj.prepare_data()
 
     print(obj.hparams)
 
