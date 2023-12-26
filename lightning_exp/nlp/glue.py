@@ -6,12 +6,14 @@ from lightning.pytorch.callbacks import (
     ModelCheckpoint,
     Timer,
     TQDMProgressBar,
+    LearningRateMonitor
 )
 from lightning.pytorch.profilers import PyTorchProfiler
 import torch
-from transformers.optimization import Adafactor
 
 from transformers import AutoConfig, AutoModelForSequenceClassification
+from transformers.optimization import Adafactor, get_scheduler
+
 import evaluate
 
 from collections import defaultdict
@@ -30,6 +32,7 @@ class GLUEModel(L.LightningModule):
         task_name: str,
         learning_rate: float = 1e-3,
         weight_decay: float = 0.0,
+        warmup_steps: int = 1000,
     ):
         super().__init__()
 
@@ -37,6 +40,7 @@ class GLUEModel(L.LightningModule):
         self.task_name = task_name
         self.learning_rate = learning_rate
         self.weight_decay = weight_decay
+        self.warmup_steps = warmup_steps
 
         self.save_hyperparameters()
 
@@ -47,6 +51,7 @@ class GLUEModel(L.LightningModule):
             num_labels=self.num_labels,
             finetuning_task=self.task_name,
         )
+
         self.model = AutoModelForSequenceClassification.from_pretrained(
             self.model_name_or_path, config=self.config
         )
@@ -70,8 +75,7 @@ class GLUEModel(L.LightningModule):
         return self.model(**inputs)
 
     def training_step(self, batch, batch_idx):
-        outputs = self(**batch)
-        loss = outputs.loss
+        loss = self(**batch).loss
         self.log("train_loss", loss, on_epoch=True, prog_bar=True, sync_dist=True)
         return loss
 
@@ -110,34 +114,44 @@ class GLUEModel(L.LightningModule):
             )
 
     def configure_optimizers(self):
-        # no_decay = ["bias", "LayerNorm.weight"]
-        # optimizer_grouped_parameters = [
-        #     {
-        #         "params": [
-        #             p
-        #             for n, p in self.model.named_parameters()
-        #             if all(nd not in n for nd in no_decay)
-        #         ],
-        #         "weight_decay": self.weight_decay,
-        #     },
-        #     {
-        #         "params": [
-        #             p
-        #             for n, p in self.model.named_parameters()
-        #             if any(nd in n for nd in no_decay)
-        #         ],
-        #         "weight_decay": 0.0,
-        #     },
-        # ]
+        no_decay = ["bias", "LayerNorm.weight"]
+        optimizer_grouped_parameters = [
+            {
+                "params": [
+                    p
+                    for n, p in self.model.named_parameters()
+                    if all(nd not in n for nd in no_decay)
+                ],
+                "weight_decay": self.weight_decay,
+            },
+            {
+                "params": [
+                    p
+                    for n, p in self.model.named_parameters()
+                    if any(nd in n for nd in no_decay)
+                ],
+                "weight_decay": 0.0,
+            },
+        ]
         # T5 hyperparameter from Google paper and
         # https://discuss.huggingface.co/t/t5-finetuning-tips/684/36
-        return Adafactor(
+        optimizer = Adafactor(
             self.model.parameters(),
             lr=self.learning_rate,
             relative_step=False,
             scale_parameter=False,
             warmup_init=False,
         )
+        scheduler = get_scheduler(
+            "linear",
+            optimizer=optimizer,
+            num_warmup_steps=self.warmup_steps,
+            num_training_steps=self.trainer.max_steps,
+        )
+        return {
+            "optimizer": optimizer,
+            "lr_scheduler": scheduler,
+        }
 
 
 def parse_args():
@@ -190,14 +204,15 @@ def main():
             # ModelCheckpoint(
             #     monitor="matthews_correlation",
             # ),
+            LearningRateMonitor(),
             Timer(),
         ],
-        enable_checkpointing=False,
         profiler=PyTorchProfiler(),
         # fast_dev_run=True,
         # limit_train_batches=0.1,
         # plugins=[SLURMEnvironment(auto_requeue=False)],
     )
+    trainer.validate(model, datamodule=dm)
     trainer.fit(model, datamodule=dm)
 
 

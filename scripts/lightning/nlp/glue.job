@@ -6,7 +6,7 @@
 #SBATCH --ntasks-per-node 18                                 # Total number of cores requested
 #SBATCH --get-user-env                       # retrieve the users login environment
 #SBATCH --mem=64G                            # server memory requested (per node)
-#SBATCH -t 01-00:00:00                           # Time limit (hh:mm:ss)
+#SBATCH -t 02-00:00:00                           # Time limit (hh:mm:ss)
 #SBATCH --partition=gpu,desa                     # Request partition
 
 mkdir -p logs/glue
