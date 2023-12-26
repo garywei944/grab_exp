@@ -123,6 +123,7 @@ class GLUEDataModule(L.LightningDataModule):
                 batched=True,
                 # num_proc=self.num_workers,
                 remove_columns=dataset["train"].column_names,
+                load_from_cache_file=False,
             )
 
             dataset.save_to_disk(self.path)

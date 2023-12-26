@@ -209,7 +209,7 @@ def main():
             LearningRateMonitor(),
             Timer(),
         ],
-        profiler=PyTorchProfiler(),
+        profiler='simple',
         # fast_dev_run=True,
         # limit_train_batches=0.1,
         # plugins=[SLURMEnvironment(auto_requeue=False)],
