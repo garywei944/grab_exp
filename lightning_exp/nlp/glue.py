@@ -156,12 +156,12 @@ class GLUEModel(L.LightningModule):
                 num_warmup_steps=self.warmup_steps,
                 num_training_steps=self.trainer.max_steps,
             )
-        else:
+        elif self.optimizer == "adafactor":
             # T5 hyperparameter from Google paper and
             # https://discuss.huggingface.co/t/t5-finetuning-tips/684/36
             optimizer = Adafactor(
                 optimizer_grouped_parameters,
-                # lr=self.learning_rate,
+                lr=self.learning_rate,
                 relative_step=False,
                 scale_parameter=True,
                 warmup_init=False,
@@ -175,6 +175,8 @@ class GLUEModel(L.LightningModule):
                 num_warmup_steps=self.warmup_steps,
                 num_training_steps=self.trainer.max_steps,
             )
+        else:
+            raise NotImplementedError
         return {
             "optimizer": optimizer,
             "lr_scheduler": {
