@@ -43,6 +43,7 @@ from transformers import (
     SchedulerType,
     default_data_collator,
     get_scheduler,
+T5ForSequenceClassification
 )
 from transformers.utils import check_min_version, send_example_telemetry
 from transformers.utils.versions import require_version
@@ -459,13 +460,24 @@ def main():
 
     def preprocess_function(examples):
         # Tokenize the texts
-        texts = (
-            (examples[sentence1_key],)
-            if sentence2_key is None
-            else (examples[sentence1_key], examples[sentence2_key])
-        )
+        # texts = (
+        #     (examples[sentence1_key],)
+        #     if sentence2_key is None
+        #     else (examples[sentence1_key], examples[sentence2_key])
+        # )
+        if sentence2_key is not None:
+            texts = [
+                f"{args.task_name} {sentence1_key}: {s1} {sentence2_key}: {s2}"
+                for s1, s2 in zip(examples[sentence1_key], examples[sentence2_key])
+            ]
+        else:
+            texts = [
+                f"{args.task_name} {sentence1_key}: {s1}"
+                for s1 in examples[sentence1_key]
+            ]
+
         result = tokenizer(
-            *texts, padding=padding, max_length=args.max_length, truncation=True
+            texts, padding=padding, max_length=args.max_length, truncation=True
         )
 
         if "label" in examples:

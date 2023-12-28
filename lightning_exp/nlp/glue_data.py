@@ -1,4 +1,3 @@
-from re import T
 from typing import Any
 
 import lightning as L
@@ -46,15 +45,15 @@ GLUE_TASK_NUM_LABELS = {
     "ax": 3,
 }
 
-GLUE_COLUMNS = [
-    "datasets_idx",
-    "input_ids",
-    "token_type_ids",
-    "attention_mask",
-    "start_positions",
-    "end_positions",
-    "labels",
-]
+# GLUE_COLUMNS = [
+#     "datasets_idx",
+#     "input_ids",
+#     "token_type_ids",
+#     "attention_mask",
+#     "start_positions",
+#     "end_positions",
+#     "labels",
+# ]
 
 
 class GLUEDataModule(L.LightningDataModule):

@@ -13,34 +13,37 @@ from lightning.pytorch.callbacks import (
 # from lightning.pytorch.profilers import PyTorchProfiler
 import torch
 
-from transformers import AutoConfig, AutoModelForSequenceClassification
+from transformers import AutoConfig, AutoTokenizer, T5ForConditionalGeneration
 from transformers.optimization import Adafactor, AdafactorSchedule, get_scheduler
 
 import evaluate
 
 from collections import defaultdict
 
-from glue_data import GLUEDataModule, GLUE_TASK_NUM_LABELS
+from glue_data_t2t import (
+    GLUET2TEDataModule,
+    TASK_NAMES,
+    TASK_VAL_NAMES,
+    GLUE_TASK_TO_LABELS,
+)
 
 from cd2root import cd2root
 
 cd2root()
 
 
-class GLUEModel(L.LightningModule):
+class GLUET5Model(L.LightningModule):
     def __init__(
         self,
-        model_name_or_path: str,
-        task_name: str,
-        optimizer: str = "adam",
+        model_name_or_path: str = "google/t5-v1_1-small",
+        optimizer: str = "adafactor",
         learning_rate: float = 1e-3,
         weight_decay: float = 0.0,
-        warmup_steps: int = 1000,
+        warmup_steps: int = 1000,  # Not used by Adafactor
     ):
         super().__init__()
 
         self.model_name_or_path = model_name_or_path
-        self.task_name = task_name
         self.optimizer = optimizer
         self.learning_rate = learning_rate
         self.weight_decay = weight_decay
@@ -48,30 +51,25 @@ class GLUEModel(L.LightningModule):
 
         self.save_hyperparameters()
 
-        self.num_labels = GLUE_TASK_NUM_LABELS[self.task_name]
-
         self.config = AutoConfig.from_pretrained(
             self.model_name_or_path,
-            num_labels=self.num_labels,
-            finetuning_task=self.task_name,
+        )
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            self.model_name_or_path,
+            use_fast=True,
+            legacy=False,
         )
 
-        self.model = AutoModelForSequenceClassification.from_pretrained(
+        self.model = T5ForConditionalGeneration.from_pretrained(
             self.model_name_or_path, config=self.config
         )
-        self.metric = evaluate.load(
-            "glue",
-            self.task_name,
-        )
-
-        self.metric2 = (
+        self.metrics = [
             evaluate.load(
                 "glue",
-                "mnli",
+                task_name.split("_")[0],
             )
-            if self.task_name == "mnli"
-            else None
-        )
+            for task_name in TASK_VAL_NAMES
+        ]
 
         self.best = defaultdict(lambda: float("-inf"))
 
@@ -84,43 +82,81 @@ class GLUEModel(L.LightningModule):
         return loss
 
     def validation_step(self, batch, batch_idx, dataloader_idx=0):
+        def string2label(s: str):
+            if not is_regression:
+                try:
+                    return GLUE_TASK_TO_LABELS[true_task_name].index(s)
+                except ValueError:
+                    return -1
+            else:
+                try:
+                    return float(s)
+                except ValueError:
+                    return -1.0
+
+        true_task_name = TASK_VAL_NAMES[dataloader_idx].split("_")[0]
         outputs = self(**batch)
         val_loss, logits = outputs[:2]
 
-        if self.num_labels > 1:
-            predictions = torch.argmax(logits, dim=-1)
-        else:
-            predictions = logits.squeeze()
+        is_regression = true_task_name == "stsb"
 
-        # Special handling for MNLI
-        metric = self.metric if dataloader_idx == 0 else self.metric2
+        # This is actually Greedy Search according to T5 paper
+        tokens = self.model.generate(
+            batch["input_ids"],
+            max_length=10,
+        )
+        texts = self.tokenizer.batch_decode(tokens, skip_special_tokens=True)
+        try:
+            labels = self.tokenizer.batch_decode(
+                batch["labels"], skip_special_tokens=True
+            )
+        except OverflowError:
+            labels = batch["labels"].clone()
+            labels[labels == -100] = self.tokenizer.pad_token_id
+            labels = self.tokenizer.batch_decode(labels, skip_special_tokens=True)
+
+        # The following is consistent with T5X implementation of evaluation
+        # https://github.com/google-research/text-to-text-transfer-transformer/blob/f1f16c0d77a7c3a6a21b5cf9f3e96adf26a71c60/t5/data/postprocessors.py#L28_L49
+        predictions = [string2label(e) for e in texts]
+        labels = [string2label(e) for e in labels]
+
+        # Hack to fix -1 to be different with labels s.t. the code is compatible with
+        # Huggingface evaluate
+        if not is_regression:
+            num_labels = len(GLUE_TASK_TO_LABELS[true_task_name])
+            predictions = [
+                (y_hat + 1) % num_labels if y_pred == -1 else y_pred
+                for y_pred, y_hat in zip(predictions, labels)
+            ]
+
+        predictions = torch.tensor(predictions, device=self.device)
+        labels = torch.tensor(labels, device=self.device)
+
+        metric = self.metrics[dataloader_idx]
         metric.add_batch(
             predictions=self.all_gather(predictions).flatten(),
-            references=self.all_gather(batch["labels"]).flatten(),
+            references=self.all_gather(labels).flatten(),
         )
 
         self.log("val_loss", val_loss, on_epoch=True, prog_bar=True, sync_dist=True)
 
-        return {"loss": val_loss, "predictions": predictions, "labels": batch["labels"]}
+        return {"loss": val_loss, "predictions": predictions, "labels": labels}
 
     def on_validation_epoch_end(self) -> None:
-        results = self.metric.compute()
+        results = {}
+        for task_name, metric in zip(TASK_VAL_NAMES, self.metrics):
+            result = metric.compute()
+            for k, v in result.items():
+                results[f"val/{task_name}-{k}"] = v
+
         self.log_dict(
             results,
-            prog_bar=True,
         )
+
         for k, v in results.items():
             self.best[k] = max(self.best[k], v)
-
-        if self.metric2 is not None:
-            results = self.metric2.compute()
-            results = {f"{k}/mm": v for k, v in results.items()}
-            self.log_dict(
-                results,
-                prog_bar=True,
-            )
-            for k, v in results.items():
-                self.best[k] = max(self.best[k], v)
+        print(results)
+        print(self.best)
 
     def configure_optimizers(self):
         no_decay = ["bias", "LayerNorm.weight"]
@@ -166,15 +202,15 @@ class GLUEModel(L.LightningModule):
                 scale_parameter=True,
                 warmup_init=False,
             )
-            # scheduler = AdafactorSchedule(optimizer, initial_lr=self.learning_rate)
+            scheduler = AdafactorSchedule(optimizer, initial_lr=self.learning_rate)
             # scheduler = AdafactorSchedule(optimizer)
 
-            scheduler = get_scheduler(
-                "constant_with_warmup",
-                optimizer=optimizer,
-                num_warmup_steps=self.warmup_steps,
-                num_training_steps=self.trainer.max_steps,
-            )
+            # scheduler = get_scheduler(
+            #     "constant_with_warmup",
+            #     optimizer=optimizer,
+            #     num_warmup_steps=self.warmup_steps,
+            #     num_training_steps=self.trainer.max_steps,
+            # )
         else:
             raise NotImplementedError
         return {
@@ -200,10 +236,10 @@ def parse_args():
         default=100,
     )
 
-    parser.add_lightning_class_args(GLUEDataModule, "data")
-    parser.add_lightning_class_args(GLUEModel, "model")
+    parser.add_lightning_class_args(GLUET2TEDataModule, "data")
+    parser.add_lightning_class_args(GLUET5Model, "model")
     parser.link_arguments("model.model_name_or_path", "data.model_name_or_path")
-    parser.link_arguments("model.task_name", "data.task_name")
+    # parser.link_arguments("model.task_name", "data.task_name")
 
     return parser.parse_args()
 
@@ -212,46 +248,46 @@ def main():
     args = parse_args()
 
     model_name = args.model.model_name_or_path
-    task_name = args.model.task_name
+    # task_name = args.model.task_name
 
     L.seed_everything(args.seed)
 
-    model = GLUEModel(**vars(args.model))
-    dm = GLUEDataModule(**vars(args.data))
+    model = GLUET5Model(**vars(args.model))
+    dm = GLUET2TEDataModule(**vars(args.data))
 
-    L.seed_everything(args.seed)
     trainer = L.Trainer(
         max_steps=args.max_steps,
         check_val_every_n_epoch=None,
         val_check_interval=args.val_interval,
-        gradient_clip_val=1.0,
+        # gradient_clip_val=1.0,
         logger=[
             TensorBoardLogger("lightning_logs", name=model_name),
-            WandbLogger(
-                project=f"t5-glue-{task_name}",
-                name=model_name,
-                entity="grab",
-                mode="online",
-            ),
+            # WandbLogger(
+            #     project=f"t5-glue-{task_name}",
+            #     name=model_name,
+            #     entity="grab",
+            #     mode="online",
+            # ),
             CSVLogger("logs", name=model_name),
         ],
         callbacks=[
             # EarlyStopping(monitor="val_loss"),
-            # ModelCheckpoint(
-            #     monitor="matthews_correlation",
-            # ),
+            ModelCheckpoint(
+                # monitor="matthews_correlation",
+                dirpath=f"checkpoints/t5_glue/{model_name}",
+                save_last=True,
+            ),
             LearningRateMonitor(logging_interval="step"),
             Timer(),
         ],
         profiler="simple",
         # fast_dev_run=True,
         # limit_train_batches=0.1,
+        # limit_val_batches=0,
         # plugins=[SLURMEnvironment(auto_requeue=False)],
     )
-    trainer.validate(model, datamodule=dm)
+    # trainer.validate(model, datamodule=dm)
     trainer.fit(model, datamodule=dm)
-
-    model.log_dict(model.best, prog_bar=True)
 
 
 if __name__ == "__main__":
