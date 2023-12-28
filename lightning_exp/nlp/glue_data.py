@@ -155,8 +155,10 @@ class GLUEDataModule(L.LightningDataModule):
                 )
                 if not self.add_task_name
                 else (
-                    [f"{self.task_name} {k1}: {s}" for s in examples[k1]],
-                    [f"{k2}: {s}" for s in examples[k2]],
+                    [
+                        f"{self.task_name} {k1}: {examples[k1][i]} {k2}: {examples[k2][i]}"
+                        for i in range(len(examples[k1]))
+                    ],
                 )
             )
         else:

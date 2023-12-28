@@ -1,3 +1,4 @@
+from sched import scheduler
 import lightning as L
 from lightning.pytorch.cli import LightningArgumentParser
 from lightning.pytorch.loggers import TensorBoardLogger, WandbLogger, CSVLogger
@@ -8,11 +9,12 @@ from lightning.pytorch.callbacks import (
     TQDMProgressBar,
     LearningRateMonitor,
 )
-from lightning.pytorch.profilers import PyTorchProfiler
+
+# from lightning.pytorch.profilers import PyTorchProfiler
 import torch
 
 from transformers import AutoConfig, AutoModelForSequenceClassification
-from transformers.optimization import Adafactor, get_scheduler
+from transformers.optimization import Adafactor, AdafactorSchedule, get_scheduler
 
 import evaluate
 
@@ -30,6 +32,7 @@ class GLUEModel(L.LightningModule):
         self,
         model_name_or_path: str,
         task_name: str,
+        optimizer: str = "adam",
         learning_rate: float = 1e-3,
         weight_decay: float = 0.0,
         warmup_steps: int = 1000,
@@ -38,6 +41,7 @@ class GLUEModel(L.LightningModule):
 
         self.model_name_or_path = model_name_or_path
         self.task_name = task_name
+        self.optimizer = optimizer
         self.learning_rate = learning_rate
         self.weight_decay = weight_decay
         self.warmup_steps = warmup_steps
@@ -100,10 +104,13 @@ class GLUEModel(L.LightningModule):
         return {"loss": val_loss, "predictions": predictions, "labels": batch["labels"]}
 
     def on_validation_epoch_end(self) -> None:
+        results = self.metric.compute()
         self.log_dict(
-            self.metric.compute(),
+            results,
             prog_bar=True,
         )
+        for k, v in results.items():
+            self.best[k] = max(self.best[k], v)
 
         if self.metric2 is not None:
             results = self.metric2.compute()
@@ -112,6 +119,8 @@ class GLUEModel(L.LightningModule):
                 results,
                 prog_bar=True,
             )
+            for k, v in results.items():
+                self.best[k] = max(self.best[k], v)
 
     def configure_optimizers(self):
         no_decay = ["bias", "LayerNorm.weight"]
@@ -133,27 +142,49 @@ class GLUEModel(L.LightningModule):
                 "weight_decay": 0.0,
             },
         ]
-        # T5 hyperparameter from Google paper and
-        # https://discuss.huggingface.co/t/t5-finetuning-tips/684/36
-        optimizer = Adafactor(
-            optimizer_grouped_parameters,
-            lr=self.learning_rate,
-            relative_step=False,
-            scale_parameter=False,
-            warmup_init=False,
-        )
-        # scheduler = get_scheduler(
-        #     "linear",
-        #     optimizer=optimizer,
-        #     num_warmup_steps=self.warmup_steps,
-        #     num_training_steps=self.trainer.max_steps,
-        # )
-        # return {
-        #     "optimizer": optimizer,
-        #     "lr_scheduler": scheduler,
-        # }
 
-        return optimizer
+        if self.optimizer == "adam":
+            optimizer = torch.optim.AdamW(
+                optimizer_grouped_parameters,
+                lr=self.learning_rate,
+                weight_decay=self.weight_decay,
+            )
+            scheduler = get_scheduler(
+                "constant_with_warmup",
+                # "cosine_with_restarts",
+                optimizer=optimizer,
+                num_warmup_steps=self.warmup_steps,
+                num_training_steps=self.trainer.max_steps,
+            )
+        else:
+            # T5 hyperparameter from Google paper and
+            # https://discuss.huggingface.co/t/t5-finetuning-tips/684/36
+            optimizer = Adafactor(
+                optimizer_grouped_parameters,
+                # lr=self.learning_rate,
+                relative_step=False,
+                scale_parameter=True,
+                warmup_init=False,
+            )
+            # scheduler = AdafactorSchedule(optimizer, initial_lr=self.learning_rate)
+            # scheduler = AdafactorSchedule(optimizer)
+
+            scheduler = get_scheduler(
+                "constant_with_warmup",
+                optimizer=optimizer,
+                num_warmup_steps=self.warmup_steps,
+                num_training_steps=self.trainer.max_steps,
+            )
+        return {
+            "optimizer": optimizer,
+            "lr_scheduler": {
+                "scheduler": scheduler,
+                "interval": "step",
+                "frequency": 1,
+            },
+        }
+
+        # return optimizer
 
 
 def parse_args():
@@ -191,6 +222,7 @@ def main():
         max_steps=args.max_steps,
         check_val_every_n_epoch=None,
         val_check_interval=args.val_interval,
+        gradient_clip_val=1.0,
         logger=[
             TensorBoardLogger("lightning_logs", name=model_name),
             WandbLogger(
@@ -206,16 +238,18 @@ def main():
             # ModelCheckpoint(
             #     monitor="matthews_correlation",
             # ),
-            LearningRateMonitor(),
+            LearningRateMonitor(logging_interval="step"),
             Timer(),
         ],
-        profiler='simple',
+        profiler="simple",
         # fast_dev_run=True,
         # limit_train_batches=0.1,
         # plugins=[SLURMEnvironment(auto_requeue=False)],
     )
     trainer.validate(model, datamodule=dm)
     trainer.fit(model, datamodule=dm)
+
+    model.log_dict(model.best, prog_bar=True)
 
 
 if __name__ == "__main__":
