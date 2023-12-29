@@ -70,7 +70,6 @@ class GLUEDataModule(L.LightningDataModule):
         eval_batch_size: int = 1024,
         num_workers: int = 1,
         use_fast_tokenizer: bool = True,
-        use_fp16: bool = False,
         data_path: str = "data/processed",
         load_from_disk: bool = True,
         add_task_name: bool = True,
@@ -85,11 +84,18 @@ class GLUEDataModule(L.LightningDataModule):
         self.eval_batch_size = eval_batch_size
         self.num_workers = num_workers
         self.use_fast_tokenizer = use_fast_tokenizer
-        self.use_fp16 = use_fp16
         self.load_from_disk = load_from_disk
         self.add_task_name = add_task_name
 
-        self.save_hyperparameters(ignore=["num_workers", "data_path", "load_from_disk"])
+        self.save_hyperparameters(
+            ignore=[
+                "train_batch_size",
+                "eval_batch_size",
+                "num_workers",
+                "data_path",
+                "load_from_disk",
+            ]
+        )
 
         self.id = sha256(self.hparams)  # important to load cached processed data
         self.path = Path(data_path) / "glue" / self.id

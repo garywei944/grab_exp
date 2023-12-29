@@ -11,9 +11,10 @@ from lightning.pytorch.callbacks import (
 from transformers.optimization import Adafactor, AdafactorSchedule, get_scheduler
 
 import torch
+from datetime import datetime
 
-from glue_data import GLUEDataModule
-from glue import GLUEModel
+from glue_data_t2t import GLUET2TDataModule
+from glue_t5 import GLUET5Model
 
 from cd2root import cd2root
 
@@ -22,11 +23,11 @@ cd2root()
 from experiments.sam import SAM
 
 
-class GLUESAMModel(GLUEModel):
+class GLUESAMModel(GLUET5Model):
     def __init__(
         self,
         model_name_or_path: str,
-        task_name: str,
+        optimizer: str = "adafactor",
         learning_rate: float = 1e-3,
         weight_decay: float = 0.0,
         warmup_steps: int = 1000,
@@ -34,7 +35,7 @@ class GLUESAMModel(GLUEModel):
     ):
         super().__init__(
             model_name_or_path=model_name_or_path,
-            task_name=task_name,
+            optimizer=optimizer,
             learning_rate=learning_rate,
             weight_decay=weight_decay,
         )
@@ -110,21 +111,21 @@ class GLUESAMModel(GLUEModel):
             # https://discuss.huggingface.co/t/t5-finetuning-tips/684/36
             optimizer = Adafactor(
                 optimizer_grouped_parameters,
-                # lr=self.learning_rate,
-                relative_step=True,
+                lr=self.learning_rate,
+                relative_step=False,
                 scale_parameter=True,
-                warmup_init=True,
+                warmup_init=False,
             )
             optimizer = SAM(optimizer_grouped_parameters, optimizer, rho=self.rho)
             # scheduler = AdafactorSchedule(optimizer, initial_lr=self.learning_rate)
-            scheduler = AdafactorSchedule(optimizer)
+            # scheduler = AdafactorSchedule(optimizer)
 
-            # scheduler = get_scheduler(
-            #     "constant_with_warmup",
-            #     optimizer=optimizer,
-            #     num_warmup_steps=self.warmup_steps,
-            #     num_training_steps=self.trainer.max_steps,
-            # )
+            scheduler = get_scheduler(
+                "constant_with_warmup",
+                optimizer=optimizer,
+                num_warmup_steps=self.warmup_steps,
+                num_training_steps=self.trainer.max_steps,
+            )
         return {
             "optimizer": optimizer,
             "lr_scheduler": {
@@ -146,37 +147,38 @@ def parse_args():
         default=100,
     )
 
-    parser.add_lightning_class_args(GLUEDataModule, "data")
+    parser.add_lightning_class_args(GLUET2TDataModule, "data")
     parser.add_lightning_class_args(GLUESAMModel, "model")
     parser.link_arguments("model.model_name_or_path", "data.model_name_or_path")
-    parser.link_arguments("model.task_name", "data.task_name")
+    # parser.link_arguments("model.task_name", "data.task_name")
 
     return parser.parse_args()
 
 
 def main():
+    timestamp = datetime.now().isoformat()
     args = parse_args()
 
     model_name = args.model.model_name_or_path
-    task_name = args.model.task_name
+    # task_name = args.model.task_name
 
     L.seed_everything(args.seed)
 
     model = GLUESAMModel(**vars(args.model))
-    dm = GLUEDataModule(**vars(args.data))
+    dm = GLUET2TDataModule(**vars(args.data))
 
     name = f"sam-{model_name}"
 
     L.seed_everything(args.seed)
     trainer = L.Trainer(
-        strategy="deepspeed_stage_3",
+        # strategy="deepspeed_stage_3",
         max_steps=args.max_steps,
         check_val_every_n_epoch=None,
         val_check_interval=args.val_interval,
         logger=[
             TensorBoardLogger("lightning_logs", name=name),
             WandbLogger(
-                project=f"t5-glue-{task_name}",
+                project=f"t5-glue",
                 name=name,
                 entity="grab",
                 mode="online",
@@ -185,19 +187,31 @@ def main():
         ],
         callbacks=[
             # EarlyStopping(monitor="val_loss"),
-            # ModelCheckpoint(
-            #     monitor="matthews_correlation",
-            # ),
+            ModelCheckpoint(
+                # monitor="matthews_correlation",
+                save_top_k=-1,
+                dirpath=f"checkpoints/{model_name}/glue/{timestamp}",
+                every_n_train_steps=1000,
+                # save_weights_only=True,
+                save_last=True,
+                verbose=True,
+            ),
             LearningRateMonitor(logging_interval="step"),
             Timer(),
         ],
         profiler="simple",
         # fast_dev_run=True,
         # limit_train_batches=0.1,
+        limit_val_batches=0,
         # plugins=[SLURMEnvironment(auto_requeue=False)],
+        benchmark=True,
     )
-    trainer.validate(model, datamodule=dm)
-    trainer.fit(model, datamodule=dm)
+    # trainer.validate(model, datamodule=dm)
+    trainer.fit(
+        model,
+        datamodule=dm,
+        ckpt_path="checkpoints/google/t5-v1_1-small/glue/2023-12-28T20:42:27.767054/epoch=0-step=7000.ckpt",
+    )
 
 
 if __name__ == "__main__":

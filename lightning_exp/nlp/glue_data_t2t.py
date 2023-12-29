@@ -66,7 +66,7 @@ TASK_VAL_NAMES = [
 ]
 
 
-class GLUET2TEDataModule(L.LightningDataModule):
+class GLUET2TDataModule(L.LightningDataModule):
     train_dataset: Dataset
     val_datasets: Dataset | list[Dataset]
 
@@ -74,7 +74,7 @@ class GLUET2TEDataModule(L.LightningDataModule):
         self,
         model_name_or_path: str,
         pad_to_max_length: bool = False,
-        max_length: int = 128,
+        max_length: int = 512,
         train_batch_size: int = 128,
         eval_batch_size: int = 128,
         num_workers: int = 1,
@@ -95,7 +95,16 @@ class GLUET2TEDataModule(L.LightningDataModule):
         self.use_fp16 = use_fp16
         self.load_from_disk = load_from_disk
 
-        self.save_hyperparameters(ignore=["num_workers", "data_path", "load_from_disk"])
+        self.save_hyperparameters(
+            ignore=[
+                "train_batch_size",
+                "eval_batch_size",
+                "num_workers",
+                "use_fp16",
+                "data_path",
+                "load_from_disk",
+            ]
+        )
 
         self.id = sha256(self.hparams)  # important to load cached processed data
         self.path = Path(data_path) / "glue" / self.id
@@ -254,8 +263,8 @@ def make_glue_train_dataset(
     num_workers: int = 1,
 ) -> Dataset:
     ds = []
-    # for task_name in TASK_NAMES:
-    for task_name in ["cola", "stsb"]:
+    for task_name in TASK_NAMES:
+        # for task_name in ["cola", "stsb"]:
 
         def func(examples: dict[str, Any]) -> BatchEncoding:
             return preprocess_function(
@@ -362,7 +371,7 @@ if __name__ == "__main__":
     #
     # pass
 
-    dm = GLUET2TEDataModule(
+    dm = GLUET2TDataModule(
         "google/t5-v1_1-small",
         pad_to_max_length=True,
         max_length=128,

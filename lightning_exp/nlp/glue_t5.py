@@ -1,3 +1,4 @@
+from os import times
 from sched import scheduler
 import lightning as L
 from lightning.pytorch.cli import LightningArgumentParser
@@ -19,9 +20,10 @@ from transformers.optimization import Adafactor, AdafactorSchedule, get_schedule
 import evaluate
 
 from collections import defaultdict
+from datetime import datetime
 
 from glue_data_t2t import (
-    GLUET2TEDataModule,
+    GLUET2TDataModule,
     TASK_NAMES,
     TASK_VAL_NAMES,
     GLUE_TASK_TO_LABELS,
@@ -95,8 +97,9 @@ class GLUET5Model(L.LightningModule):
                     return -1.0
 
         true_task_name = TASK_VAL_NAMES[dataloader_idx].split("_")[0]
-        outputs = self(**batch)
-        val_loss, logits = outputs[:2]
+        # outputs = self(**batch)
+        # val_loss, logits = outputs[:2]
+        val_loss = self(**batch).loss
 
         is_regression = true_task_name == "stsb"
 
@@ -106,6 +109,7 @@ class GLUET5Model(L.LightningModule):
             max_length=10,
         )
         texts = self.tokenizer.batch_decode(tokens, skip_special_tokens=True)
+
         try:
             labels = self.tokenizer.batch_decode(
                 batch["labels"], skip_special_tokens=True
@@ -115,11 +119,22 @@ class GLUET5Model(L.LightningModule):
             labels[labels == -100] = self.tokenizer.pad_token_id
             labels = self.tokenizer.batch_decode(labels, skip_special_tokens=True)
 
+        if batch_idx == 0:
+            print("-" * 80)
+            print("texts and labels")
+            print(texts)
+            print(labels)
+
         # The following is consistent with T5X implementation of evaluation
         # https://github.com/google-research/text-to-text-transfer-transformer/blob/f1f16c0d77a7c3a6a21b5cf9f3e96adf26a71c60/t5/data/postprocessors.py#L28_L49
         predictions = [string2label(e) for e in texts]
         labels = [string2label(e) for e in labels]
 
+        if batch_idx == 0:
+            print("-" * 80)
+            print("predictions and labels")
+            print(predictions)
+            print(labels)
         # Hack to fix -1 to be different with labels s.t. the code is compatible with
         # Huggingface evaluate
         if not is_regression:
@@ -138,7 +153,7 @@ class GLUET5Model(L.LightningModule):
             references=self.all_gather(labels).flatten(),
         )
 
-        self.log("val_loss", val_loss, on_epoch=True, prog_bar=True, sync_dist=True)
+        self.log("val_loss", val_loss, on_epoch=True, sync_dist=True)
 
         return {"loss": val_loss, "predictions": predictions, "labels": labels}
 
@@ -202,15 +217,15 @@ class GLUET5Model(L.LightningModule):
                 scale_parameter=True,
                 warmup_init=False,
             )
-            scheduler = AdafactorSchedule(optimizer, initial_lr=self.learning_rate)
+            # scheduler = AdafactorSchedule(optimizer, initial_lr=self.learning_rate)
             # scheduler = AdafactorSchedule(optimizer)
 
-            # scheduler = get_scheduler(
-            #     "constant_with_warmup",
-            #     optimizer=optimizer,
-            #     num_warmup_steps=self.warmup_steps,
-            #     num_training_steps=self.trainer.max_steps,
-            # )
+            scheduler = get_scheduler(
+                "constant_with_warmup",
+                optimizer=optimizer,
+                num_warmup_steps=self.warmup_steps,
+                num_training_steps=self.trainer.max_steps,
+            )
         else:
             raise NotImplementedError
         return {
@@ -236,7 +251,7 @@ def parse_args():
         default=100,
     )
 
-    parser.add_lightning_class_args(GLUET2TEDataModule, "data")
+    parser.add_lightning_class_args(GLUET2TDataModule, "data")
     parser.add_lightning_class_args(GLUET5Model, "model")
     parser.link_arguments("model.model_name_or_path", "data.model_name_or_path")
     # parser.link_arguments("model.task_name", "data.task_name")
@@ -245,6 +260,7 @@ def parse_args():
 
 
 def main():
+    timestamp = datetime.now().isoformat()
     args = parse_args()
 
     model_name = args.model.model_name_or_path
@@ -253,7 +269,7 @@ def main():
     L.seed_everything(args.seed)
 
     model = GLUET5Model(**vars(args.model))
-    dm = GLUET2TEDataModule(**vars(args.data))
+    dm = GLUET2TDataModule(**vars(args.data))
 
     trainer = L.Trainer(
         max_steps=args.max_steps,
@@ -262,20 +278,24 @@ def main():
         # gradient_clip_val=1.0,
         logger=[
             TensorBoardLogger("lightning_logs", name=model_name),
-            # WandbLogger(
-            #     project=f"t5-glue-{task_name}",
-            #     name=model_name,
-            #     entity="grab",
-            #     mode="online",
-            # ),
+            WandbLogger(
+                project=f"t5-glue",
+                name=model_name,
+                entity="grab",
+                mode="online",
+            ),
             CSVLogger("logs", name=model_name),
         ],
         callbacks=[
             # EarlyStopping(monitor="val_loss"),
             ModelCheckpoint(
                 # monitor="matthews_correlation",
-                dirpath=f"checkpoints/t5_glue/{model_name}",
+                save_top_k=-1,
+                dirpath=f"checkpoints/{model_name}/glue/{timestamp}",
+                every_n_train_steps=1000,
+                # save_weights_only=True,
                 save_last=True,
+                verbose=True,
             ),
             LearningRateMonitor(logging_interval="step"),
             Timer(),
@@ -283,11 +303,15 @@ def main():
         profiler="simple",
         # fast_dev_run=True,
         # limit_train_batches=0.1,
-        # limit_val_batches=0,
+        limit_val_batches=0,
         # plugins=[SLURMEnvironment(auto_requeue=False)],
     )
     # trainer.validate(model, datamodule=dm)
-    trainer.fit(model, datamodule=dm)
+    trainer.fit(
+        model,
+        datamodule=dm,
+        ckpt_path="checkpoints/google/t5-v1_1-small/glue/2023-12-28T18:12:26.650635/epoch=7-step=54000.ckpt",
+    )
 
 
 if __name__ == "__main__":
