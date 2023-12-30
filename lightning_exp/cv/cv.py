@@ -3,118 +3,223 @@ from torch import nn, Tensor
 import numpy as np
 
 import lightning as L
-from lightning.pytorch.cli import LightningCLI, LightningArgumentParser
+from lightning.pytorch.cli import LightningArgumentParser
+from lightning.pytorch.loggers import TensorBoardLogger, WandbLogger, CSVLogger
+from lightning.pytorch.callbacks import (
+    ModelCheckpoint,
+    Timer,
+    LearningRateMonitor,
+)
 from torchmetrics import Accuracy
 
 from lightning.pytorch.demos.boring_classes import BoringDataModule
 
-import torchopt
+from transformers import get_cosine_schedule_with_warmup
+
+from datetime import datetime
+
+from datamodules import CVDataModule, CIFAR10DataModule
 
 from cd2root import cd2root
 
 cd2root()
 
-from lightning_exp.cv.datamodules import CVDataModule, CIFAR10DataModule
-
-class CLI(LightningCLI):
-    def add_arguments_to_parser(self, parser: LightningArgumentParser) -> None:
-        parser.add_argument("--demo", action="store_true", help="Run demo")
-
-        parser.link_arguments("data", "model.dm", apply_on="instantiate")
+from experiments.cv.models import WRN
 
 
 class Model(L.LightningModule):
     def __init__(
         self,
-        model_name: str,
-        dm: CVDataModule,
-        optimizer: str,
-        learning_rate: float,
-        weight_decay: float,
-        momentum: float,
-        adam_beta1: float,
-        adam_beta2: float,
+        model_name: str = "wrn",
+        dims: tuple[int, ...] = (3, 32, 32),
+        num_classes: int = 10,
+        optimizer: str = "sgd",
+        learning_rate: float = 1e-3,
+        weight_decay: float = 5e-4,
+        momentum: float = 0.9,
+        adam_beta1: float = 0.9,
+        adam_beta2: float = 0.999,
     ):
         super().__init__()
 
+        self.model_name = model_name
+        # TODO: this is actually a bug that dims need to be manually set
+        self.dims = dims
+        self.num_classes = num_classes
+        self.optimizer = optimizer
+        self.learning_rate = learning_rate
+        self.weight_decay = weight_decay
+        self.momentum = momentum
+        self.adam_beta1 = adam_beta1
+        self.adam_beta2 = adam_beta2
+
         self.save_hyperparameters()
-        self.automatic_optimization = False
 
-        # init models
-        self.model = nn.Linear(np.prod(dm.dims), dm.num_classes)
-
-        # convert it to functorch
-        self.params = dict(self.model.named_parameters())
-        self.buffers = dict(self.model.named_buffers())
-        self.params = {k: v for k, v in self.params.items() if v.requires_grad}
-        for v in self.params.values():
-            v.requires_grad_(False)
+        if self.model_name == "wrn":
+            self.model = WRN(n_classes=self.num_classes)
+        else:
+            raise NotImplementedError
 
         self.loss_fn = nn.CrossEntropyLoss()
+        self.metrics = Accuracy(task="multiclass", num_classes=self.num_classes)
 
-        # init grab sampler
-        self.sampler = ...
+    def forward(self, x: Tensor) -> Tensor:
+        return self.model(x)
 
-        # init optimizer
-        self.optimizer = self.get_optimizer()
-        self.opt_state = self.optimizer.init(self.params)
-
-        # init metrics
-        self.train_acc = Accuracy(task="multiclass", num_classes=dm.num_classes)
-        self.val_acc = Accuracy(task="multiclass", num_classes=dm.num_classes)
-
-    def training_step(self, batch: Tensor, batch_idx: int) -> Tensor:
+    def training_step(self, batch: tuple[Tensor, Tensor], batch_idx: int) -> Tensor:
         x, y = batch
-        ft_per_sample_grads, (batch_loss, logits) = ft_compute_sample_grad_and_loss(
-            self.params, self.buffers, x, y
-        )
-        self.sampler.step(ft_per_sample_grads)
-
-        grads = {k: g.mean(dim=0) for k, g in ft_per_sample_grads.items()}
-        updates, self.opt_state = self.optimizer.update(
-            grads, self.opt_state, params=self.params, inplace=True
-        )  # get updates
-        self.params = torchopt.apply_updates(
-            self.params, updates, inplace=True
-        )  # update network parameters
-
+        y_hat = self(x)
+        loss = self.loss_fn(y_hat, y)
+        self.log("train_loss", loss)
         return loss
 
-    def validation_step(self, batch: Tensor, batch_idx: int) -> Tensor:
+    def validation_step(self, batch: tuple[Tensor, Tensor], batch_idx: int) -> None:
         x, y = batch
-        y_hat = self.model(x)
-        loss = nn.functional.mse_loss(y_hat, y)
-        self.log("val_loss", loss)
-        return loss
+        y_hat = self(x)
+        # self.metrics(y_hat, y)
+        self.metrics.update(y_hat, y)
+        self.log("val_acc", self.metrics, on_step=False, on_epoch=True)
 
-    def get_optimizer(self):
-        # Initiate optimizer
-        if self.hparams.optimizer == "sgd":
-            optimizer = torchopt.sgd(
-                self.hparams.learning_rate,
-                momentum=self.hparams.momentum,
-                weight_decay=self.hparams.weight_decay,
+    # def on_validation_epoch_end(self) -> None:
+    #     self.log("val_acc", self.metrics.compute())
+    #     self.metrics.reset()
+
+    def configure_optimizers(self):
+        no_decay = ["bias", "LayerNorm.weight"]
+        optimizer_grouped_parameters = [
+            {
+                "params": [
+                    p
+                    for n, p in self.named_parameters()
+                    if all(nd not in n for nd in no_decay)
+                ],
+                "weight_decay": self.weight_decay,
+            },
+            {
+                "params": [
+                    p
+                    for n, p in self.named_parameters()
+                    if any(nd in n for nd in no_decay)
+                ],
+                "weight_decay": 0.0,
+            },
+        ]
+        if self.optimizer == "sgd":
+            optimizer = torch.optim.SGD(
+                optimizer_grouped_parameters,
+                lr=self.learning_rate,
+                weight_decay=self.weight_decay,
+                momentum=self.momentum,
+                nesterov=True,
             )
-        elif self.hparams.optimizer in ["adam", "adamw"]:
-            optimizer = torchopt.adamw(
-                self.hparams.learning_rate,
-                betas=(self.hparams.adam_beta1, self.hparams.adam_beta2),
-                weight_decay=self.hparams.weight_decay,
-                use_accelerated_op=True,
+        elif self.optimizer == "adam":
+            optimizer = torch.optim.Adam(
+                optimizer_grouped_parameters,
+                lr=self.learning_rate,
+                weight_decay=self.weight_decay,
+                betas=(self.adam_beta1, self.adam_beta2),
             )
         else:
-            raise ValueError("Unknown optimizer")
+            raise ValueError
 
-        return optimizer
+        # Use cosine scheduler
+        scheduler = get_cosine_schedule_with_warmup(
+            optimizer,
+            num_warmup_steps=0,
+            num_training_steps=self.trainer.max_steps,
+        )
+
+        return {
+            "optimizer": optimizer,
+            "lr_scheduler": {
+                "scheduler": scheduler,
+                "interval": "step",
+                "frequency": 1,
+            },
+        }
+
+
+def parse_args():
+    parser = LightningArgumentParser()
+    parser.add_argument("-s", "--seed", type=int, default=42)
+    # parser.add_argument("-T", "--max_steps", type=int, default=2500)
+    # parser.add_argument(
+    #     "-vi",
+    #     "--val_interval",
+    #     type=int,
+    #     default=100,
+    # )
+    parser.add_argument(
+        "-e",
+        "--epochs",
+        type=int,
+        default=200,
+    )
+
+    parser.add_lightning_class_args(Model, "model")
+    parser.add_lightning_class_args(CIFAR10DataModule, "data")
+    # parser.link_arguments("model.model_name_or_path", "data.model_name_or_path")
+    # parser.link_arguments("model.task_name", "data.task_name")
+    # parser.link_arguments("data", "model.dm", apply_on="instantiate")
+    # parser.link_arguments("model.dm", "data", apply_on="instantiate")
+
+    return parser.parse_args()
 
 
 def main():
-    cli = CLI(Model, CVDataModule, subclass_mode_data=True, run=False)
+    timestamp = datetime.now().isoformat()
+    args = parse_args()
 
-    print(cli.parser)
-    # print(cli.parser.parse_args())
-    # print(cli.parser.demo)
-    print(cli.config)
+    model_name = args.model.model_name
+    # task_name = args.model.task_name
+
+    L.seed_everything(args.seed)
+
+    dm = CIFAR10DataModule(**vars(args.data))
+    model = Model(**vars(args.model))
+
+    trainer = L.Trainer(
+        # max_steps=args.max_steps,
+        max_epochs=args.epochs,
+        check_val_every_n_epoch=1,
+        # val_check_interval=args.val_interval,
+        # gradient_clip_val=1.0,
+        logger=[
+            TensorBoardLogger("lightning_logs", name=model_name),
+            # WandbLogger(
+            #     project=f"sam-cifar10",
+            #     name=model_name,
+            #     entity="grab",
+            #     mode="online",
+            # ),
+            CSVLogger("logs", name=model_name),
+        ],
+        callbacks=[
+            # EarlyStopping(monitor="val_loss"),
+            # ModelCheckpoint(
+            #     # monitor="matthews_correlation",
+            #     save_top_k=-1,
+            #     dirpath=f"checkpoints/{model_name}/glue/{timestamp}",
+            #     every_n_train_steps=1000,
+            #     # save_weights_only=True,
+            #     save_last=True,
+            #     verbose=True,
+            # ),
+            LearningRateMonitor(logging_interval="step"),
+            Timer(),
+        ],
+        # profiler="simple",
+        # fast_dev_run=True,
+        limit_train_batches=0.1,
+        # limit_val_batches=0,
+        # plugins=[SLURMEnvironment(auto_requeue=False)],
+    )
+    # trainer.validate(model, datamodule=dm)
+    trainer.fit(
+        model,
+        datamodule=dm,
+        # ckpt_path="checkpoints/google/t5-v1_1-small/glue/2023-12-28T18:12:26.650635/epoch=7-step=54000.ckpt",
+    )
 
 
 if __name__ == "__main__":

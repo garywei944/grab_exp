@@ -7,8 +7,8 @@ from torchvision import datasets
 
 # MNIST
 data = (
-    datasets.MNIST(
-        root="~/projects/grab_exp/data/external", train=True, download=True
+    datasets.FashionMNIST(
+        root="~/projects/grab_exp/data/external", download=True
     ).data
     / 255
 )
