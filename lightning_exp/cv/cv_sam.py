@@ -66,6 +66,7 @@ class SAMModel(Model):
         x, y = batch
 
         def closure():
+            # Second back-prop
             disable_running_stats(self)
             loss = self.loss_fn(self(x), y)
             self.manual_backward(loss)
@@ -74,6 +75,7 @@ class SAMModel(Model):
             )
             return loss
 
+        # First back-prop
         enable_running_stats(self)
         loss = self.loss_fn(self(x), y)
         self.manual_backward(loss)
@@ -89,25 +91,26 @@ class SAMModel(Model):
         return loss
 
     def configure_optimizers(self):
-        no_decay = ["bias", "LayerNorm.weight"]
-        optimizer_grouped_parameters = [
-            {
-                "params": [
-                    p
-                    for n, p in self.named_parameters()
-                    if all(nd not in n for nd in no_decay)
-                ],
-                "weight_decay": self.weight_decay,
-            },
-            {
-                "params": [
-                    p
-                    for n, p in self.named_parameters()
-                    if any(nd in n for nd in no_decay)
-                ],
-                "weight_decay": 0.0,
-            },
-        ]
+        # no_decay = ["bias", "LayerNorm.weight"]
+        # optimizer_grouped_parameters = [
+        #     {
+        #         "params": [
+        #             p
+        #             for n, p in self.named_parameters()
+        #             if all(nd not in n for nd in no_decay)
+        #         ],
+        #         "weight_decay": self.weight_decay,
+        #     },
+        #     {
+        #         "params": [
+        #             p
+        #             for n, p in self.named_parameters()
+        #             if any(nd in n for nd in no_decay)
+        #         ],
+        #         "weight_decay": 0.0,
+        #     },
+        # ]
+        optimizer_grouped_parameters = self.model.parameters()
         if self.optimizer == "sgd":
             optimizer = torch.optim.SGD(
                 optimizer_grouped_parameters,
@@ -137,6 +140,10 @@ class SAMModel(Model):
             optimizer_grouped_parameters,
             optimizer,
             rho=self.rho,
+            lr=self.learning_rate,
+            weight_decay=self.weight_decay,
+            momentum=self.momentum,
+            nesterov=True,
         )
 
         return {
@@ -193,7 +200,7 @@ def main():
         max_epochs=args.epochs,
         check_val_every_n_epoch=1,
         # val_check_interval=args.val_interval,
-        gradient_clip_val=5.0,
+        # gradient_clip_val=5.0,
         logger=[
             TensorBoardLogger("lightning_logs", name=model_name),
             WandbLogger(

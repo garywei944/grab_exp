@@ -96,25 +96,26 @@ class Model(L.LightningModule):
     #     self.metrics.reset()
 
     def configure_optimizers(self):
-        no_decay = ["bias", "LayerNorm.weight"]
-        optimizer_grouped_parameters = [
-            {
-                "params": [
-                    p
-                    for n, p in self.named_parameters()
-                    if all(nd not in n for nd in no_decay)
-                ],
-                "weight_decay": self.weight_decay,
-            },
-            {
-                "params": [
-                    p
-                    for n, p in self.named_parameters()
-                    if any(nd in n for nd in no_decay)
-                ],
-                "weight_decay": 0.0,
-            },
-        ]
+        # no_decay = ["bias", "LayerNorm.weight"]
+        # optimizer_grouped_parameters = [
+        #     {
+        #         "params": [
+        #             p
+        #             for n, p in self.named_parameters()
+        #             if all(nd not in n for nd in no_decay)
+        #         ],
+        #         "weight_decay": self.weight_decay,
+        #     },
+        #     {
+        #         "params": [
+        #             p
+        #             for n, p in self.named_parameters()
+        #             if any(nd in n for nd in no_decay)
+        #         ],
+        #         "weight_decay": 0.0,
+        #     },
+        # ]
+        optimizer_grouped_parameters = self.model.parameters()
         if self.optimizer == "sgd":
             optimizer = torch.optim.SGD(
                 optimizer_grouped_parameters,
