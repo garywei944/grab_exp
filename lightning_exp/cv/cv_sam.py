@@ -110,18 +110,22 @@ class SAMModel(Model):
         #         "weight_decay": 0.0,
         #     },
         # ]
-        optimizer_grouped_parameters = self.model.parameters()
+        optimizer_grouped_parameters = self.parameters()
         if self.optimizer == "sgd":
-            optimizer = torch.optim.SGD(
+            optimizer = SAM(
                 optimizer_grouped_parameters,
+                torch.optim.SGD,
+                rho=self.rho,
                 lr=self.learning_rate,
                 weight_decay=self.weight_decay,
                 momentum=self.momentum,
                 nesterov=True,
             )
         elif self.optimizer == "adam":
-            optimizer = torch.optim.Adam(
+            optimizer = SAM(
                 optimizer_grouped_parameters,
+                torch.optim.AdamW,
+                rho=self.rho,
                 lr=self.learning_rate,
                 weight_decay=self.weight_decay,
                 betas=(self.adam_beta1, self.adam_beta2),
@@ -134,16 +138,6 @@ class SAMModel(Model):
             optimizer,
             num_warmup_steps=0,
             num_training_steps=self.trainer.max_steps,
-        )
-
-        optimizer = SAM(
-            optimizer_grouped_parameters,
-            optimizer,
-            rho=self.rho,
-            lr=self.learning_rate,
-            weight_decay=self.weight_decay,
-            momentum=self.momentum,
-            nesterov=True,
         )
 
         return {
@@ -203,12 +197,12 @@ def main():
         # gradient_clip_val=5.0,
         logger=[
             TensorBoardLogger("lightning_logs", name=model_name),
-            WandbLogger(
-                project=f"sam-cifar10",
-                name=model_name,
-                entity="grab",
-                mode="online",
-            ),
+            # WandbLogger(
+            #     project=f"sam-cifar10",
+            #     name=model_name,
+            #     entity="grab",
+            #     mode="online",
+            # ),
             CSVLogger("logs", name=model_name),
         ],
         callbacks=[
