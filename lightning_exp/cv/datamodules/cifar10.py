@@ -42,6 +42,19 @@ class CIFAR10DataModule(CVDataModule):
             ]
         )
 
+        if data_augmentation == "basic":
+            self.train_transform = transforms.Compose(
+                [
+                    transforms.RandomHorizontalFlip(),
+                    transforms.RandomCrop(32, padding=4),
+                    self.transform,
+                ]
+            )
+        elif data_augmentation == "none":
+            self.train_transform = self.transform
+        else:
+            raise NotImplementedError
+
         self.dims = (3, 32, 32)
         self.num_classes = 10
 
@@ -51,7 +64,7 @@ class CIFAR10DataModule(CVDataModule):
 
     def setup(self, stage=None):
         self.train_dataset = CIFAR10(
-            self.data_dir, train=True, transform=self.transform
+            self.data_dir, train=True, transform=self.train_transform
         )
         self.test_dataset = CIFAR10(
             self.data_dir, train=False, transform=self.transform

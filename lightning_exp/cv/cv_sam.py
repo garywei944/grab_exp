@@ -1,3 +1,4 @@
+from cvxpy import logistic
 import torch
 from torch import nn, Tensor
 import numpy as np
@@ -19,15 +20,17 @@ from transformers import get_cosine_schedule_with_warmup
 from datetime import datetime
 
 from datamodules import CVDataModule, CIFAR10DataModule
+from cv import Model
 
 from cd2root import cd2root
 
 cd2root()
 
 from experiments.cv.models import WRN
+from experiments.sam import SAM, enable_running_stats, disable_running_stats
 
 
-class Model(L.LightningModule):
+class SAMModel(Model):
     def __init__(
         self,
         model_name: str = "wrn",
@@ -39,61 +42,53 @@ class Model(L.LightningModule):
         momentum: float = 0.9,
         adam_beta1: float = 0.9,
         adam_beta2: float = 0.999,
+        rho: float = 0.05,
     ):
-        super().__init__()
-
-        self.model_name = model_name
-        # TODO: this is actually a bug that dims need to be manually set
-        self.dims = dims
-        self.num_classes = num_classes
-        self.optimizer = optimizer
-        self.learning_rate = learning_rate
-        self.weight_decay = weight_decay
-        self.momentum = momentum
-        self.adam_beta1 = adam_beta1
-        self.adam_beta2 = adam_beta2
+        super().__init__(
+            model_name=model_name,
+            dims=dims,
+            num_classes=num_classes,
+            optimizer=optimizer,
+            learning_rate=learning_rate,
+            weight_decay=weight_decay,
+            momentum=momentum,
+            adam_beta1=adam_beta1,
+            adam_beta2=adam_beta2,
+        )
+        self.rho = rho
 
         self.save_hyperparameters()
 
-        if self.model_name == "wrn":
-            self.model = WRN(n_classes=self.num_classes)
-        else:
-            raise NotImplementedError
+        self.automatic_optimization = False
 
-        self.loss_fn = nn.CrossEntropyLoss()
-        self.metrics = Accuracy(task="multiclass", num_classes=self.num_classes)
-
-    def forward(self, x: Tensor) -> Tensor:
-        return self.model(x)
-
-    def training_step(self, batch: tuple[Tensor, Tensor], batch_idx: int) -> Tensor:
+    def training_step(self, batch, batch_idx):
+        opt = self.optimizers()
         x, y = batch
-        logits = self(x)
-        loss = self.loss_fn(logits, y)
-        self.log("train_loss", loss, on_epoch=True, prog_bar=True)
-        return loss
 
-    def validation_step(self, batch: tuple[Tensor, Tensor], batch_idx: int) -> None:
-        x, y = batch
-        logits = self(x)
-        loss = self.loss_fn(logits, y)
-        # self.metrics(logits, y)
-        self.metrics.update(logits, y)
-        self.log(
-            "val_loss",
-            loss,
-            on_step=False,
-            on_epoch=True,
-            prog_bar=True,
-            sync_dist=True,
-        )
-        self.log("val_acc", self.metrics, on_step=False, on_epoch=True)
+        def closure():
+            # Second back-prop
+            disable_running_stats(self)
+            loss = self.loss_fn(self(x), y)
+            self.manual_backward(loss)
+            self.clip_gradients(
+                opt, gradient_clip_val=5.0, gradient_clip_algorithm="norm"
+            )
+            return loss
+
+        # First back-prop
+        enable_running_stats(self)
+        loss = self.loss_fn(self(x), y)
+        self.manual_backward(loss)
+
+        opt.step(closure=closure)
+        opt.zero_grad()
+
+        sch = self.lr_schedulers()
+        sch.step()
+
+        self.log("train_loss", loss, on_epoch=True, prog_bar=True, sync_dist=True)
 
         return loss
-
-    # def on_validation_epoch_end(self) -> None:
-    #     self.log("val_acc", self.metrics.compute())
-    #     self.metrics.reset()
 
     def configure_optimizers(self):
         # no_decay = ["bias", "LayerNorm.weight"]
@@ -115,18 +110,22 @@ class Model(L.LightningModule):
         #         "weight_decay": 0.0,
         #     },
         # ]
-        optimizer_grouped_parameters = self.model.parameters()
+        optimizer_grouped_parameters = self.parameters()
         if self.optimizer == "sgd":
-            optimizer = torch.optim.SGD(
+            optimizer = SAM(
                 optimizer_grouped_parameters,
+                torch.optim.SGD,
+                rho=self.rho,
                 lr=self.learning_rate,
                 weight_decay=self.weight_decay,
                 momentum=self.momentum,
                 nesterov=True,
             )
         elif self.optimizer == "adam":
-            optimizer = torch.optim.Adam(
+            optimizer = SAM(
                 optimizer_grouped_parameters,
+                torch.optim.AdamW,
+                rho=self.rho,
                 lr=self.learning_rate,
                 weight_decay=self.weight_decay,
                 betas=(self.adam_beta1, self.adam_beta2),
@@ -168,7 +167,7 @@ def parse_args():
         default=200,
     )
 
-    parser.add_lightning_class_args(Model, "model")
+    parser.add_lightning_class_args(SAMModel, "model")
     parser.add_lightning_class_args(CIFAR10DataModule, "data")
     # parser.link_arguments("model.model_name_or_path", "data.model_name_or_path")
     # parser.link_arguments("model.task_name", "data.task_name")
@@ -182,28 +181,28 @@ def main():
     timestamp = datetime.now().isoformat()
     args = parse_args()
 
-    model_name = f"{args.model.model_name}-da_{args.data.data_augmentation}"
+    model_name = f"sam-{args.model.model_name}-da_{args.data.data_augmentation}"
     # task_name = args.model.task_name
 
     L.seed_everything(args.seed)
 
     dm = CIFAR10DataModule(**vars(args.data))
-    model = Model(**vars(args.model))
+    model = SAMModel(**vars(args.model))
 
     trainer = L.Trainer(
         # max_steps=args.max_steps,
         max_epochs=args.epochs,
         check_val_every_n_epoch=1,
         # val_check_interval=args.val_interval,
-        # gradient_clip_val=1.0,
+        # gradient_clip_val=5.0,
         logger=[
             TensorBoardLogger("lightning_logs", name=model_name),
-            WandbLogger(
-                project=f"sam-cifar10",
-                name=model_name,
-                entity="grab",
-                mode="online",
-            ),
+            # WandbLogger(
+            #     project=f"sam-cifar10",
+            #     name=model_name,
+            #     entity="grab",
+            #     mode="online",
+            # ),
             CSVLogger("logs", name=model_name),
         ],
         callbacks=[
@@ -230,7 +229,7 @@ def main():
     trainer.fit(
         model,
         datamodule=dm,
-        # ckpt_path="lightning_logs/wrn/version_6/checkpoints/epoch=39-step=7840.ckpt",
+        # ckpt_path="checkpoints/google/t5-v1_1-small/glue/2023-12-28T18:12:26.650635/epoch=7-step=54000.ckpt",
     )
 
 

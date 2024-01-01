@@ -1,4 +1,22 @@
 import torch
+from torch.nn.modules.batchnorm import _BatchNorm
+
+
+def disable_running_stats(model):
+    def _disable(module):
+        if isinstance(module, _BatchNorm):
+            module.backup_momentum = module.momentum
+            module.momentum = 0
+
+    model.apply(_disable)
+
+
+def enable_running_stats(model):
+    def _enable(module):
+        if isinstance(module, _BatchNorm) and hasattr(module, "backup_momentum"):
+            module.momentum = module.backup_momentum
+
+    model.apply(_enable)
 
 
 class SAM(torch.optim.Optimizer):
@@ -8,7 +26,7 @@ class SAM(torch.optim.Optimizer):
         defaults = dict(rho=rho, adaptive=adaptive, **kwargs)
         super(SAM, self).__init__(params, defaults)
 
-        self.base_optimizer = base_optimizer
+        self.base_optimizer = base_optimizer(self.param_groups, **kwargs)
         self.param_groups = self.base_optimizer.param_groups
         self.defaults.update(self.base_optimizer.defaults)
 
