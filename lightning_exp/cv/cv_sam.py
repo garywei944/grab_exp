@@ -83,12 +83,16 @@ class SAMModel(Model):
         opt.step(closure=closure)
         opt.zero_grad()
 
-        sch = self.lr_schedulers()
-        sch.step()
+        # sch = self.lr_schedulers()
+        # sch.step()
 
         self.log("train_loss", loss, on_epoch=True, prog_bar=True, sync_dist=True)
 
         return loss
+
+    def on_train_epoch_end(self):
+        sch = self.lr_schedulers()
+        sch.step()
 
     def configure_optimizers(self):
         # no_decay = ["bias", "LayerNorm.weight"]
@@ -134,17 +138,22 @@ class SAMModel(Model):
             raise ValueError
 
         # Use cosine scheduler
-        scheduler = get_cosine_schedule_with_warmup(
+        # scheduler = get_cosine_schedule_with_warmup(
+        #     optimizer,
+        #     num_warmup_steps=0,
+        #     num_training_steps=self.trainer.max_steps,
+        # )
+        scheduler = torch.optim.lr_scheduler.MultiStepLR(
             optimizer,
-            num_warmup_steps=0,
-            num_training_steps=self.trainer.max_steps,
+            milestones=[60, 120, 160],
+            gamma=0.2,
         )
 
         return {
             "optimizer": optimizer,
             "lr_scheduler": {
                 "scheduler": scheduler,
-                "interval": "step",
+                "interval": "epoch",
                 "frequency": 1,
             },
         }
@@ -197,12 +206,12 @@ def main():
         # gradient_clip_val=5.0,
         logger=[
             TensorBoardLogger("lightning_logs", name=model_name),
-            # WandbLogger(
-            #     project=f"sam-cifar10",
-            #     name=model_name,
-            #     entity="grab",
-            #     mode="online",
-            # ),
+            WandbLogger(
+                project=f"sam-cifar10",
+                name=model_name,
+                entity="grab",
+                mode="online",
+            ),
             CSVLogger("logs", name=model_name),
         ],
         callbacks=[

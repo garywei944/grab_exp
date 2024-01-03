@@ -45,8 +45,8 @@ class CIFAR10DataModule(CVDataModule):
         if data_augmentation == "basic":
             self.train_transform = transforms.Compose(
                 [
-                    transforms.RandomHorizontalFlip(),
                     transforms.RandomCrop(32, padding=4),
+                    transforms.RandomHorizontalFlip(),
                     self.transform,
                 ]
             )
@@ -77,6 +77,7 @@ class CIFAR10DataModule(CVDataModule):
             shuffle=self.shuffle,
             num_workers=self.num_workers,
             # pin_memory=True,
+            drop_last=True,
         )
 
     def val_dataloader(self):
