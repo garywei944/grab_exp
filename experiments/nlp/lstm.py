@@ -140,13 +140,15 @@ def repackage_hidden(h):
     
 def per_sample_grads(model, data, targets):
     def compute_loss(input, target):
-        output, _ = model(input, model.init_hidden(1))
-        loss = criterion(output, target)
+        output, _ = model(input.unsqueeze(0), model.init_hidden(1))
+        loss = criterion(output.view(-1, model.ntoken), target)
         return loss
 
-    vmap_grad = ft.vmap(ft.grad(compute_loss))
+    # Assuming the batch dimension is the first dimension in data and targets
+    vmap_grad = ft.vmap(ft.grad(compute_loss), in_dims=(0, 0))
     batch_grads = vmap_grad(data, targets)
     return batch_grads
+
 
 # eval_batch_size = 10
 corpus = Corpus(args.data)
