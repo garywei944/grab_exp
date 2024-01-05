@@ -16,14 +16,21 @@ def initialize_weights(module):
 
 
 class BasicBlock(nn.Module):
-    def __init__(self, in_channels, out_channels, stride, drop_rate):
+    def __init__(
+        self, in_channels, out_channels, stride, drop_rate, norm="bn", gn_groups=32
+    ):
         super(BasicBlock, self).__init__()
 
         self.drop_rate = drop_rate
 
         self._preactivate_both = in_channels != out_channels
 
-        self.bn1 = nn.BatchNorm2d(in_channels)
+        if norm == "bn":
+            self.bn1 = nn.BatchNorm2d(in_channels)
+        elif norm == "gn":
+            self.bn1 = nn.GroupNorm(gn_groups, in_channels)
+        else:
+            raise ValueError("invalid norm type")
         self.conv1 = nn.Conv2d(
             in_channels,
             out_channels,
@@ -33,7 +40,12 @@ class BasicBlock(nn.Module):
             bias=False,
         )
 
-        self.bn2 = nn.BatchNorm2d(out_channels)
+        if norm == "bn":
+            self.bn2 = nn.BatchNorm2d(out_channels)
+        elif norm == "gn":
+            self.bn2 = nn.GroupNorm(gn_groups, out_channels)
+        else:
+            raise ValueError("invalid norm type")
         self.conv2 = nn.Conv2d(
             out_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=False
         )
@@ -82,8 +94,13 @@ class WRN(nn.Module):
         widening_factor=10,
         drop_rate=0.0,
         depth=28,
+        norm="bn",
+        gn_groups=32,
     ):
         super(WRN, self).__init__()
+
+        self.norm = norm
+        self.gn_groups = gn_groups
 
         block = BasicBlock
         n_blocks_per_stage = (depth - 4) // 6
@@ -129,7 +146,12 @@ class WRN(nn.Module):
             stride=2,
             drop_rate=drop_rate,
         )
-        self.bn = nn.BatchNorm2d(n_channels[3])
+        if norm == "bn":
+            self.bn = nn.BatchNorm2d(n_channels[3])
+        elif norm == "gn":
+            self.bn = nn.GroupNorm(gn_groups, n_channels[3])
+        else:
+            raise ValueError("invalid norm type")
 
         # compute conv feature size
         with torch.no_grad():

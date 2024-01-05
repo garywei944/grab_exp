@@ -72,7 +72,7 @@ class GLUET2TDataModule(L.LightningDataModule):
 
     def __init__(
         self,
-        model_name_or_path: str,
+        model_name_or_path: str = "google/t5-v1_1-small",
         pad_to_max_length: bool = False,
         max_length: int = 512,
         train_batch_size: int = 128,
@@ -192,7 +192,7 @@ class GLUET2TDataModule(L.LightningDataModule):
                 # num_workers=self.num_workers,
             )
             for e in self.val_datasets
-        ]
+        ][0]
 
 
 def preprocess_function(

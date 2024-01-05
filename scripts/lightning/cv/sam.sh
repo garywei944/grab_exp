@@ -11,23 +11,28 @@ for seed in 0; do
   #   --seed $seed \
   #   --data.train_batch_size 64 \
   #   --data.data_augmentation basic
-  sbatch --gres=gpu:4 \
-    scripts/lightning/cv/sam.job \
-    python lightning_exp/cv/cv.py \
-    --seed $seed \
-    --data.train_batch_size 64 \
-    --data.data_augmentation none
+  # sbatch --gres=gpu:4 \
+  #   scripts/lightning/cv/sam.job \
+  #   python lightning_exp/cv/cv.py \
+  #   --seed $seed \
+  #   --data.train_batch_size 64 \
+  #   --data.data_augmentation none
   # sbatch --gres=gpu:4 \
   #   scripts/lightning/cv/sam.job \
   #   python lightning_exp/cv/cv_sam.py \
   #   --seed $seed \
   #   --data.train_batch_size 64 \
   #   --data.data_augmentation basic
-  sbatch --gres=gpu:4 \
+  # sbatch --gres=gpu:4 \
+  #   scripts/lightning/cv/sam.job \
+  #   python lightning_exp/cv/cv_sam.py \
+  #   --seed $seed \
+  #   --data.train_batch_size 64 \
+  #   --data.data_augmentation none
+
+  sbatch --gres=gpu:a6000:1 \
     scripts/lightning/cv/sam.job \
-    python lightning_exp/cv/cv_sam.py \
-    --seed $seed \
-    --data.train_batch_size 64 \
-    --data.data_augmentation none
+    python experiments/lightning/nlp/glue_t5_eval.py \
+    --seed $seed
 done
 # done
