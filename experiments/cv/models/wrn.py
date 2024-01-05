@@ -46,6 +46,8 @@ class BasicBlock(nn.Module):
             self.bn2 = nn.BatchNorm2d(out_channels)
         elif norm == "gn":
             self.bn2 = nn.GroupNorm(gn_groups, out_channels)
+        elif norm == "in":
+            self.bn2 = nn.InstanceNorm2d(out_channels)
         else:
             raise ValueError("invalid norm type")
         self.conv2 = nn.Conv2d(
