@@ -26,16 +26,14 @@ from cd2root import cd2root
 
 cd2root()
 
-from experiments.cv.models import WRN
 from experiments.sam import SAM, enable_running_stats, disable_running_stats
 
 
 class SAMModel(Model):
     def __init__(
         self,
+        dm: CVDataModule = None,
         model_name: str = "wrn",
-        dims: tuple[int, ...] = (3, 32, 32),
-        num_classes: int = 10,
         optimizer: str = "sgd",
         learning_rate: float = 0.1,
         weight_decay: float = 5e-4,
@@ -43,21 +41,22 @@ class SAMModel(Model):
         adam_beta1: float = 0.9,
         adam_beta2: float = 0.999,
         rho: float = 0.05,
+        norm: str = "bn",
     ):
         super().__init__(
+            dm=dm,
             model_name=model_name,
-            dims=dims,
-            num_classes=num_classes,
             optimizer=optimizer,
             learning_rate=learning_rate,
             weight_decay=weight_decay,
             momentum=momentum,
             adam_beta1=adam_beta1,
             adam_beta2=adam_beta2,
+            norm=norm,
         )
         self.rho = rho
 
-        self.save_hyperparameters()
+        self.save_hyperparameters(ignore="dm")
 
         self.automatic_optimization = False
 
@@ -183,7 +182,10 @@ def parse_args():
     # parser.link_arguments("data", "model.dm", apply_on="instantiate")
     # parser.link_arguments("model.dm", "data", apply_on="instantiate")
 
-    return parser.parse_args()
+    args = parser.parse_args()
+    del args.model.dm
+
+    return args
 
 
 def main():
@@ -196,7 +198,7 @@ def main():
     L.seed_everything(args.seed)
 
     dm = CIFAR10DataModule(**vars(args.data))
-    model = SAMModel(**vars(args.model))
+    model = SAMModel(dm=dm, **vars(args.model))
 
     trainer = L.Trainer(
         # max_steps=args.max_steps,
