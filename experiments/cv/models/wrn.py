@@ -17,7 +17,7 @@ def initialize_weights(module):
 
 class BasicBlock(nn.Module):
     def __init__(
-        self, in_channels, out_channels, stride, drop_rate, norm="bn", gn_groups=16
+        self, in_channels, out_channels, stride, drop_rate, norm="bn", gn_groups=8
     ):
         super(BasicBlock, self).__init__()
 
@@ -29,6 +29,8 @@ class BasicBlock(nn.Module):
             self.bn1 = nn.BatchNorm2d(in_channels)
         elif norm == "gn":
             self.bn1 = nn.GroupNorm(gn_groups, in_channels)
+        elif norm == "in":
+            self.bn1 = nn.InstanceNorm2d(in_channels)
         else:
             raise ValueError("invalid norm type")
         self.conv1 = nn.Conv2d(
@@ -95,7 +97,7 @@ class WRN(nn.Module):
         drop_rate=0.0,
         depth=28,
         norm="bn",
-        gn_groups=16,
+        gn_groups=8,
     ):
         super(WRN, self).__init__()
 
@@ -156,6 +158,8 @@ class WRN(nn.Module):
             self.bn = nn.BatchNorm2d(n_channels[3])
         elif norm == "gn":
             self.bn = nn.GroupNorm(gn_groups, n_channels[3])
+        elif norm == "in":
+            self.bn = nn.InstanceNorm2d(n_channels[3])
         else:
             raise ValueError("invalid norm type")
 
