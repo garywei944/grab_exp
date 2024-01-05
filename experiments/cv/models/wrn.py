@@ -17,7 +17,7 @@ def initialize_weights(module):
 
 class BasicBlock(nn.Module):
     def __init__(
-        self, in_channels, out_channels, stride, drop_rate, norm="bn", gn_groups=32
+        self, in_channels, out_channels, stride, drop_rate, norm="bn", gn_groups=16
     ):
         super(BasicBlock, self).__init__()
 
@@ -95,7 +95,7 @@ class WRN(nn.Module):
         drop_rate=0.0,
         depth=28,
         norm="bn",
-        gn_groups=32,
+        gn_groups=16,
     ):
         super(WRN, self).__init__()
 
@@ -129,6 +129,8 @@ class WRN(nn.Module):
             block,
             stride=1,
             drop_rate=drop_rate,
+            norm=norm,
+            gn_groups=gn_groups,
         )
         self.stage2 = self._make_stage(
             n_channels[1],
@@ -137,6 +139,8 @@ class WRN(nn.Module):
             block,
             stride=2,
             drop_rate=drop_rate,
+            norm=norm,
+            gn_groups=gn_groups,
         )
         self.stage3 = self._make_stage(
             n_channels[2],
@@ -145,6 +149,8 @@ class WRN(nn.Module):
             block,
             stride=2,
             drop_rate=drop_rate,
+            norm=norm,
+            gn_groups=gn_groups,
         )
         if norm == "bn":
             self.bn = nn.BatchNorm2d(n_channels[3])
@@ -165,22 +171,42 @@ class WRN(nn.Module):
         self.apply(initialize_weights)
 
     def _make_stage(
-        self, in_channels, out_channels, n_blocks, block, stride, drop_rate
+        self,
+        in_channels,
+        out_channels,
+        n_blocks,
+        block,
+        stride,
+        drop_rate,
+        norm,
+        gn_groups,
     ):
         stage = nn.Sequential()
         for index in range(n_blocks):
-            block_name = "block{}".format(index + 1)
+            block_name = f"block{index + 1}"
             if index == 0:
                 stage.add_module(
                     block_name,
                     block(
-                        in_channels, out_channels, stride=stride, drop_rate=drop_rate
+                        in_channels,
+                        out_channels,
+                        stride=stride,
+                        drop_rate=drop_rate,
+                        norm=norm,
+                        gn_groups=gn_groups,
                     ),
                 )
             else:
                 stage.add_module(
                     block_name,
-                    block(out_channels, out_channels, stride=1, drop_rate=drop_rate),
+                    block(
+                        out_channels,
+                        out_channels,
+                        stride=1,
+                        drop_rate=drop_rate,
+                        norm=norm,
+                        gn_groups=gn_groups,
+                    ),
                 )
         return stage
 
