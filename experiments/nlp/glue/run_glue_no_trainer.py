@@ -43,14 +43,22 @@ from transformers import (
     SchedulerType,
     default_data_collator,
     get_scheduler,
-T5ForSequenceClassification
+    T5ForSequenceClassification,
 )
 from transformers.utils import check_min_version, send_example_telemetry
 from transformers.utils.versions import require_version
 
-from transformers.optimization import Adafactor, AdafactorSchedule
+import torchopt
+from torch.func import grad, grad_and_value, vmap, functional_call
+
 
 import wandb
+
+# from cd2root import cd2root
+#
+# cd2root()
+
+from grabsampler import GraBSampler
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
 check_min_version("4.36.0")
@@ -553,18 +561,6 @@ def main():
     #     },
     # ]
     # optimizer = torch.optim.AdamW(optimizer_grouped_parameters, lr=args.learning_rate)
-    optimizer = Adafactor(
-        model.parameters(),
-        lr=args.learning_rate,
-        eps=(1e-30, 1e-3),
-        clip_threshold=1.0,
-        decay_rate=-0.8,
-        beta1=None,
-        weight_decay=0.0,
-        relative_step=False,
-        scale_parameter=False,
-        warmup_init=False,
-    )
 
     # Scheduler and math around the number of training steps.
     overrode_max_train_steps = False
@@ -581,18 +577,53 @@ def main():
     #     num_warmup_steps=args.num_warmup_steps,
     #     num_training_steps=args.max_train_steps,
     # )
-    lr_scheduler = AdafactorSchedule(optimizer, initial_lr=args.learning_rate)
+    # lr_scheduler = AdafactorSchedule(optimizer, initial_lr=args.learning_rate)
+
+    # convert to functional model
+    params = dict(model.named_parameters())
+    buffers = dict(model.named_buffers())
+    params = {k: v for k, v in params.items() if v.requires_grad}
+    for v in params.values():
+        v.requires_grad_(False)
+
+    # Initiate sampler
+    d = sum(p[1].numel() for p in model.named_parameters())
+    logging.info(f"Number of training examples: n = {len(train_dataset):,}")
+    logging.info(f"Number of parameters: d = {d:,}")
+
+    # Functional optimizer
+    optimizer = torchopt.sgd(
+        lr=torchopt.schedule.linear_schedule(
+            args.learning_rate, 0, args.max_train_steps
+        ),
+        weight_decay=args.weight_decay,
+        momentum=0.9,
+    )
+
+    sampler = GraBSampler(
+        train_dataset,
+        params,
+        batch_size=args.per_device_train_batch_size,
+        **vars(grab_args),
+    )
 
     # Prepare everything with our `accelerator`.
-    (
-        model,
-        optimizer,
-        train_dataloader,
-        eval_dataloader,
-        lr_scheduler,
-    ) = accelerator.prepare(
-        model, optimizer, train_dataloader, eval_dataloader, lr_scheduler
+    # (
+    #     model,
+    #     optimizer,
+    #     train_dataloader,
+    #     eval_dataloader,
+    #     lr_scheduler,
+    # ) = accelerator.prepare(
+    #     model, optimizer, train_dataloader, eval_dataloader, lr_scheduler
+    # )
+    (model, train_dataloader, eval_dataloader) = accelerator.prepare(
+        model, train_dataloader, eval_dataloader
     )
+
+    opt_state = optimizer.init(params)
+
+    ft_compute_sample_grad_and_loss = get_func(model, next(iter(train_dataset)))
 
     # We need to recalculate our total training steps as the size of the training dataloader may have changed
     num_update_steps_per_epoch = math.ceil(
@@ -617,7 +648,7 @@ def main():
             "lr_scheduler_type"
         ].value
         accelerator.init_trackers(
-            f"grab_glue_{args.task_name}",
+            f"grab-glue-{args.task_name}",
             experiment_config,
             init_kwargs={"wandb": {"entity": "grab", "name": args.model_name_or_path}},
         )
@@ -705,22 +736,36 @@ def main():
         else:
             active_dataloader = train_dataloader
         for step, batch in enumerate(active_dataloader):
-            outputs = model(**batch)
-            loss = outputs.loss
-            # We keep track of the loss at each epoch
-            if args.with_tracking:
-                total_loss += loss.detach().float()
-            loss = loss / args.gradient_accumulation_steps
-            accelerator.backward(loss)
-            if (
-                step % args.gradient_accumulation_steps == 0
-                or step == len(train_dataloader) - 1
-            ):
-                optimizer.step()
-                lr_scheduler.step()
-                optimizer.zero_grad()
-                progress_bar.update(1)
-                completed_steps += 1
+            # outputs = model(**batch)
+            # loss = outputs.loss
+            # # We keep track of the loss at each epoch
+            # if args.with_tracking:
+            #     total_loss += loss.detach().float()
+            # loss = loss / args.gradient_accumulation_steps
+            # accelerator.backward(loss)
+            # if (
+            #     step % args.gradient_accumulation_steps == 0
+            #     or step == len(train_dataloader) - 1
+            # ):
+            #     optimizer.step()
+            #     lr_scheduler.step()
+            #     optimizer.zero_grad()
+            #     progress_bar.update(1)
+            #     completed_steps += 1
+
+            ft_per_sample_grads, batch_loss = ft_compute_sample_grad_and_loss(
+                params, buffers, dict(batch)
+            )
+            sampler.step(ft_per_sample_grads)
+            grads = {k: g.mean(dim=0) for k, g in ft_per_sample_grads.items()}
+            updates, opt_state = optimizer.update(
+                grads, opt_state, params=params
+            )  # get updates
+            params = torchopt.apply_updates(params, updates)  # update model parameters
+            losses.append(batch_loss.float())
+
+            progress_bar.update(1)
+            completed_steps += 1
 
             if isinstance(checkpointing_steps, int):
                 if completed_steps % checkpointing_steps == 0:
@@ -837,6 +882,24 @@ def main():
         all_results = {f"eval_{k}": v for k, v in eval_metric.items()}
         with open(os.path.join(args.output_dir, "all_results.json"), "w") as f:
             json.dump(all_results, f)
+
+
+def compute_loss(model, params, buffers, kwargs):
+    # vamp remove the first dimension, which is batch size, but bert requires it
+    kwargs = {k: v.unsqueeze(0) for k, v in kwargs.items()}
+
+    # Gary: BERT doesn't treat input_ids as named kwargs, so we need to
+    # explicitly pass it in
+    input_ids = kwargs["input_ids"]
+    kwargs.pop("input_ids")
+    out = functional_call(
+        module=model,
+        parameter_and_buffer_dicts=(params, buffers),
+        args=(input_ids,),
+        kwargs=kwargs,
+    )
+
+    return out.loss_fn
 
 
 if __name__ == "__main__":

@@ -58,6 +58,7 @@ class Model(L.LightningModule):
         momentum: float = 0.9,
         adam_beta1: float = 0.9,
         adam_beta2: float = 0.999,
+        milestones: list[int] = None,
     ):
         super().__init__()
 
@@ -71,6 +72,7 @@ class Model(L.LightningModule):
         self.momentum = momentum
         self.adam_beta1 = adam_beta1
         self.adam_beta2 = adam_beta2
+        self.milestones = milestones
 
         self.save_hyperparameters(ignore="dm")
 
@@ -162,12 +164,14 @@ class Model(L.LightningModule):
             optimizer = torchopt.adamw(
                 lr=multi_step_lr(
                     learning_rate=self.learning_rate,
-                    milestones=[60, 120, 160],
+                    milestones=self.milestones,
                     gamma=0.2,
                 ),
                 betas=(self.adam_beta1, self.adam_beta2),
                 weight_decay=self.weight_decay,
-                mask=lambda name: all(nd not in name for nd in no_decay),
+                mask={
+                    k: all(nd not in k for nd in no_decay) for k in self.fparams.keys()
+                },
             )
         else:
             raise NotImplementedError
@@ -199,7 +203,7 @@ def parse_args():
     parser.add_lightning_class_args(CIFAR10DataModule, "data")
 
     args = parser.parse_args()
-    del args.model.dm
+    del args.model.dm, args.model.milestones
 
     return args
 
@@ -213,11 +217,20 @@ def main():
     L.seed_everything(args.seed)
 
     dm = CIFAR10DataModule(**vars(args.data))
-    model = Model(dm=dm, **vars(args.model))
+    dm.prepare_data()
+    dm.setup()
+
+    n_batches = len(dm.train_dataloader())
+    model = Model(
+        dm=dm,
+        milestones=[60 * n_batches, 120 * n_batches, 160 * n_batches],
+        **vars(args.model),
+    )
 
     trainer = L.Trainer(
         # max_steps=args.max_steps,
-        max_epochs=args.epochs,
+        # max_epochs=args.epochs,
+        max_steps=args.epochs * len(dm.train_dataloader()),
         check_val_every_n_epoch=1,
         # val_check_interval=args.val_interval,
         # gradient_clip_val=5.0,

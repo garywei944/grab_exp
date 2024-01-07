@@ -63,16 +63,15 @@ class GLUEDataModule(L.LightningDataModule):
     def __init__(
         self,
         model_name_or_path: str,
-        task_name: str,
+        task_name: str = "qnli",
         pad_to_max_length: bool = True,
         max_length: int = 128,
-        train_batch_size: int = 128,
+        train_batch_size: int = 32,
         eval_batch_size: int = 1024,
         num_workers: int = 1,
         use_fast_tokenizer: bool = True,
         data_path: str = "data/processed",
         load_from_disk: bool = True,
-        add_task_name: bool = True,
     ):
         super().__init__()
 
@@ -85,7 +84,6 @@ class GLUEDataModule(L.LightningDataModule):
         self.num_workers = num_workers
         self.use_fast_tokenizer = use_fast_tokenizer
         self.load_from_disk = load_from_disk
-        self.add_task_name = add_task_name
 
         self.save_hyperparameters(
             ignore=[
@@ -112,7 +110,7 @@ class GLUEDataModule(L.LightningDataModule):
             self.data_collator = default_data_collator
         else:
             self.data_collator = DataCollatorWithPadding(
-                self.tokenizer, pad_to_multiple_of=8 if self.use_fp16 else None
+                self.tokenizer, pad_to_multiple_of=8
             )
 
     def prepare_data(self) -> None:
@@ -154,25 +152,12 @@ class GLUEDataModule(L.LightningDataModule):
         if len(self.text_keys) > 1:
             k1, k2 = self.text_keys
             texts = (
-                (
-                    examples[k1],
-                    examples[k2],
-                )
-                if not self.add_task_name
-                else (
-                    [
-                        f"{self.task_name} {k1}: {examples[k1][i]} {k2}: {examples[k2][i]}"
-                        for i in range(len(examples[k1]))
-                    ],
-                )
+                examples[k1],
+                examples[k2],
             )
         else:
             k = self.text_keys[0]
-            texts = (
-                (examples[k],)
-                if not self.add_task_name
-                else ([f"{self.task_name} {k}: {s}" for s in examples[k]],)
-            )
+            texts = (examples[k],)
 
         padding = "max_length" if self.pad_to_max_length else False
         result = self.tokenizer(
@@ -210,7 +195,8 @@ class GLUEDataModule(L.LightningDataModule):
 
 
 if __name__ == "__main__":
-    obj = GLUEDataModule(model_name_or_path="google/t5-v1_1-small", task_name="mrpc")
+    # obj = GLUEDataModule(model_name_or_path="google/t5-v1_1-small", task_name="mrpc")
+    obj = GLUEDataModule(model_name_or_path="prajjwal1/bert-tiny", task_name="qnli")
 
     obj.prepare_data()
 

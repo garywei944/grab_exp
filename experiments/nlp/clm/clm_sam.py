@@ -48,6 +48,22 @@ MODEL_CONFIG_CLASSES = list(MODEL_FOR_CAUSAL_LM_MAPPING.keys())
 MODEL_TYPES = tuple(conf.model_type for conf in MODEL_CONFIG_CLASSES)
 
 
+@dataclass
+class Args:
+    rho: float = field(
+        default=0.05,
+        metadata={
+            "help": "rho for sharpness-aware minimization",
+        },
+    )
+    adaptive: bool = field(
+        default=False,
+        metadata={
+            "help": "adaptive for sharpness-aware minimization",
+        },
+    )
+
+
 class DESampler(Sampler):
     orders: Tensor
     next_orders: Tensor
@@ -361,6 +377,8 @@ def train(
     checkpointing_steps,
     max_steps,
     device="cuda",
+    adaptive=False,
+    rho=0.05,
 ):
     sampler.reset()
     # TODO: no resume or accumulate gradient
@@ -377,8 +395,6 @@ def train(
         grads = {k: g.mean(dim=0) for k, g in ft_per_sample_grads.items()}
 
         # Sharpness-aware minimization
-        adaptive = False
-        rho = 0.05
         norm = torch.stack(
             [
                 # https://github.com/davda54/sam/issues/16
@@ -476,16 +492,17 @@ def validate(eval_loader, model, device="cuda", disable_tqdm=False):
 def main():
     # Parse the arguments
     parser = HfArgumentParser(
-        (ModelArguments, DataTrainingArguments, TrainingArguments, GraBArgs)
+        (ModelArguments, DataTrainingArguments, TrainingArguments, GraBArgs, Args)
     )
     model_args: ModelArguments
     data_args: DataTrainingArguments
     training_args: TrainingArguments
     grab_args: GraBArgs
+    args: Args
     if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
         # If we pass only one argument to the script, and it's the path to a json file,
         # let's parse it to get our arguments.
-        model_args, data_args, training_args, grab_args = parser.parse_json_file(
+        model_args, data_args, training_args, grab_args, args = parser.parse_json_file(
             json_file=os.path.abspath(sys.argv[1])
         )
     else:
@@ -494,6 +511,7 @@ def main():
             data_args,
             training_args,
             grab_args,
+            args,
         ) = parser.parse_args_into_dataclasses()
 
     assert (
@@ -875,7 +893,7 @@ def main():
                 training_args.learning_rate,
                 warmup_steps,
                 max_steps,
-                training_args.learning_rate / 10,
+                # training_args.learning_rate / 10,
             ),
             betas=(training_args.adam_beta1, training_args.adam_beta2),
             weight_decay=training_args.weight_decay,
@@ -953,6 +971,8 @@ def main():
                     checkpointing_steps=save_steps,
                     max_steps=max_steps,
                     device=device,
+                    adaptive=args.adaptive,
+                    rho=args.rho,
                 )
 
             # For Adaptive Mean Balance that need m and v from optimizer

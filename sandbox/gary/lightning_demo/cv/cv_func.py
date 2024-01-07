@@ -11,6 +11,10 @@ from lightning.pytorch.cli import LightningCLI
 
 from torchmetrics.functional import accuracy
 from functools import partial
+from torch.func import functional_call, grad_and_value, vmap
+
+from torchmetrics import Accuracy
+import torchopt
 
 from cd2root import cd2root
 
@@ -81,6 +85,15 @@ class CIFAR10DataModule(L.LightningDataModule):
         )
 
 
+def compute_loss(model, loss_fn, params, buffers, inputs, targets):
+    inputs = inputs.unsqueeze(0)
+    targets = targets.unsqueeze(0)
+
+    logits = functional_call(model, (params, buffers), (inputs,))
+
+    return loss_fn(logits, targets), logits
+
+
 class LitClassifier(L.LightningModule):
     def __init__(self, lr=1e-3, wd=5e-4, **kwargs):
         super().__init__()
@@ -91,19 +104,45 @@ class LitClassifier(L.LightningModule):
         )
         self.loss_fn = nn.CrossEntropyLoss()
 
+        self.fparams = dict(self.model.named_parameters())
+        self.fbuffers = dict(self.model.named_buffers())
+        self.fparams = {k: v for k, v in self.fparams.items() if v.requires_grad}
+        for v in self.fparams.values():
+            v.requires_grad_(False)
+        self.metrics = Accuracy(task="multiclass", num_classes=10)
+
+        self.automatic_optimization = False
+
+        self.ft_grad_loss = vmap(
+            grad_and_value(
+                partial(compute_loss, self.model, self.loss_fn), has_aux=True
+            ),
+            in_dims=(None, None, 0, 0),
+        )
+
     def forward(self, x):
         return self.model(x)
 
     def training_step(self, batch, batch_idx):
-        x, y = batch
-        logits = self(x)
-        loss = self.loss_fn(logits, y)
-        preds = torch.argmax(logits, dim=1)
+        per_sample_grads, (batch_loss, logits) = self.ft_grad_loss(
+            self.fparams,
+            self.fbuffers,
+            *batch,
+        )
 
-        acc = accuracy(preds, y, task="multiclass", num_classes=10)
-        self.log("train_loss", loss, prog_bar=True, logger=True)
-        self.log("train_acc", acc, prog_bar=True, logger=True)
-        return loss
+        grads = {k: v.mean(dim=0) for k, v in per_sample_grads.items()}
+        updates, self.opt_state = self.optimizer.update(
+            grads, self.opt_state, params=self.fparams
+        )
+        self.fparams = torchopt.apply_updates(self.fparams, updates)
+
+        self.log(
+            "train_loss",
+            batch_loss.mean(),
+            on_epoch=True,
+            prog_bar=True,
+            sync_dist=True,
+        )
 
     def evaluate(self, batch, stage=None):
         x, y = batch
@@ -122,13 +161,65 @@ class LitClassifier(L.LightningModule):
     # def test_step(self, batch, batch_idx):
     #     return self.evaluate(batch, "test")
 
-    def configure_optimizers(self):
-        return torch.optim.SGD(
-            self.parameters(),
+    def func_optimizers(self):
+        # if self.opt == "sgd":
+        #     optimizer = torchopt.sgd(
+        #         lr=multi_step_lr(
+        #             learning_rate=self.learning_rate,
+        #             milestones=[60, 120, 160],
+        #             gamma=0.2,
+        #         ),
+        #         momentum=self.momentum,
+        #         weight_decay=self.weight_decay,
+        #         nesterov=True,
+        #     )
+        # elif self.opt == "adam":
+        #     no_decay = ["bias", "LayerNorm.weight"]
+        #
+        #     # mask = torchopt.transform.masked(
+        #     #     torchopt.transform.add_decayed_weights(self.weight_decay),
+        #     #     lambda name: all(nd not in name for nd in no_decay),
+        #     # )
+        #     optimizer = torchopt.adamw(
+        #         lr=multi_step_lr(
+        #             learning_rate=self.learning_rate,
+        #             milestones=[60, 120, 160],
+        #             gamma=0.2,
+        #         ),
+        #         betas=(self.adam_beta1, self.adam_beta2),
+        #         weight_decay=self.weight_decay,
+        #         mask=lambda name: all(nd not in name for nd in no_decay),
+        #     )
+        # else:
+        #     raise NotImplementedError
+        optimizer = torchopt.sgd(
             lr=self.hparams.lr,
             momentum=0.9,
             weight_decay=self.hparams.wd,
+            nesterov=True,
         )
+
+        optimizer = torchopt.chain(torchopt.clip_grad_norm(5.0), optimizer)
+
+        return optimizer
+
+    def configure_optimizers(self):
+        # torchopt will be passed to correct device
+        self.optimizer = self.func_optimizers()
+        self.opt_state = self.optimizer.init(self.fparams)
+
+        return torch.optim.SGD(self.parameters(), lr=0)
+
+
+def multi_step_lr(
+    learning_rate: float,
+    milestones: list[int],
+    gamma: float = 0.1,
+):
+    def _multi_step_lr(step: int):
+        return learning_rate * gamma ** sum(step > m for m in milestones)
+
+    return _multi_step_lr
 
 
 def main():

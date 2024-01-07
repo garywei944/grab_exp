@@ -3,7 +3,7 @@
 mkdir -p logs/clm
 
 dataset=wikitext
-dataset_config=wikitext-2-raw-v1
+dataset_config=wikitext-103-raw-v1
 config=gpt2
 balance=mean
 seq_len=128
