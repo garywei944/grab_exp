@@ -161,6 +161,11 @@ def parse_args():
         type=int,
         default=200,
     )
+    parser.add_argument(
+        "--ckpt",
+        type=str,
+        default=None,
+    )
 
     parser.add_lightning_class_args(Model, "model")
     parser.add_lightning_class_args(CIFAR10DataModule, "data")
@@ -214,6 +219,7 @@ def main():
             LearningRateMonitor(logging_interval="step"),
             Timer(),
         ],
+        enable_checkpointing=True,
         # profiler="simple",
         # fast_dev_run=True,
         # limit_train_batches=0.1,
@@ -225,6 +231,7 @@ def main():
         model,
         datamodule=dm,
         # ckpt_path="lightning_logs/wrn/version_6/checkpoints/epoch=39-step=7840.ckpt",
+        ckpt_path=args.ckpt,
     )
 
 

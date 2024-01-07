@@ -100,6 +100,7 @@ class Model(L.LightningModule):
     def forward(self, x: Tensor) -> Tensor:
         return self.model(x)
 
+    @torch.no_grad()
     def training_step(self, batch: tuple[Tensor, Tensor], batch_idx: int) -> Tensor:
         per_sample_grads, (batch_loss, logits) = self.ft_grad_loss(
             self.fparams,
@@ -109,9 +110,9 @@ class Model(L.LightningModule):
 
         grads = {k: v.mean(dim=0) for k, v in per_sample_grads.items()}
         updates, self.opt_state = self.optimizer.update(
-            grads, self.opt_state, params=self.fparams, inplace=True
+            grads, self.opt_state, params=self.fparams
         )
-        # self.fparams = torchopt.apply_updates(self.fparams, updates)
+        self.fparams = torchopt.apply_updates(self.fparams, updates)
 
         self.log(
             "train_loss",
@@ -135,7 +136,7 @@ class Model(L.LightningModule):
             prog_bar=True,
             sync_dist=True,
         )
-        self.log("val_acc", self.metrics, on_step=False, on_epoch=True)
+        self.log("val_acc", self.metrics, on_step=False, on_epoch=True, prog_bar=True)
 
         return loss
 
@@ -241,7 +242,7 @@ def main():
             #     save_last=True,
             #     verbose=True,
             # ),
-            LearningRateMonitor(logging_interval="step"),
+            # LearningRateMonitor(logging_interval="step"),
             Timer(),
         ],
         # profiler="simple",
