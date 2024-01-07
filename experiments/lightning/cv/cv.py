@@ -56,21 +56,16 @@ class Model(L.LightningModule):
 
             self.model = WRN(n_classes=self.num_classes, norm=self.norm)
         elif self.model_name == "resnet":
-            from torchvision.models import resnet18
-
             if self.norm == "bn":
-                layer_norm = nn.BatchNorm2d
+                from experiments.cv.models.preact_resnet import PreActResNet18
+
+                self.model = PreActResNet18(n_cls=self.num_classes)
             elif self.norm == "gn":
-                layer_norm = partial(nn.GroupNorm, 32)
-            elif self.norm == "in":
-                layer_norm = nn.InstanceNorm3d
+                from experiments.cv.models.preact_resnet import PreActResNet18GroupNorm
+
+                self.model = PreActResNet18GroupNorm(n_cls=self.num_classes)
             else:
                 raise NotImplementedError
-
-            self.model = resnet18(
-                num_classes=self.num_classes,
-                norm_layer=layer_norm,
-            )
         else:
             raise NotImplementedError
 
