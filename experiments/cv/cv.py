@@ -27,13 +27,14 @@ from grabsampler import GraBSampler, BalanceType
 from grabsampler.utils import EventTimer, pretty_time
 
 from cd2root import cd2root
+
 cd2root()
 
 from experiments.utils.func_helpers import make_func_params
 from experiments.utils.arguments import GraBArgs, TrainArgs
 
 DATASETS = ["mnist", "fashion_mnist", "cifar10", "cifar100"]
-MODELS = ["lr", "lenet", "resnet", "minnet"]
+MODELS = ["lr", "lenet", "resnet", "minnet", "wrn"]
 
 
 @dataclass
@@ -74,6 +75,24 @@ class Args:
             "help": "Depth of ResNet",
         },
     )
+    wrn_norm: str = field(
+        default="in",
+        metadata={
+            "choices": ["in", "bn", "gn"],
+            "help": "Norm type for ResNet",
+        },
+    )
+
+
+def multi_step_lr(
+    learning_rate: float,
+    milestones: list[int],
+    gamma: float = 0.1,
+):
+    def _multi_step_lr(step: int):
+        return learning_rate * gamma ** sum(step > m for m in milestones)
+
+    return _multi_step_lr
 
 
 def get_exp_id(args: Args, grab_args: GraBArgs, train_args: TrainArgs) -> str:
@@ -235,6 +254,16 @@ def get_model(
         from models import MinNet
 
         model = MinNet().to(device)
+    elif args.model_name == "wrn":
+        assert args.dataset_name in ["cifar10", "cifar100"]
+        from models import WRN
+
+        model = WRN(
+            input_shape=(1, 3, 32, 32),
+            n_classes=num_classes,
+            norm=args.wrn_norm,
+            gn_groups=8,
+        ).to(device)
     else:
         raise ValueError
     # Transform everything to functional programming
@@ -247,16 +276,29 @@ def get_model(
 
 
 def get_optimizer(train_args: TrainArgs) -> GradientTransformation:
+    if train_args.scheduler == "constant":
+        lr = train_args.learning_rate
+    elif train_args.scheduler == "multi_step_lr":
+        # TODO make this configured by arguments
+        lr = multi_step_lr(
+            train_args.learning_rate,
+            milestones=[60, 120, 160],
+            gamma=0.2,
+        )
+    else:
+        raise ValueError("Unknown scheduler")
+
     # Initiate optimizer
     if train_args.optimizer == "sgd":
         optimizer = torchopt.sgd(
-            train_args.learning_rate,
+            lr,
             momentum=train_args.momentum,
             weight_decay=train_args.weight_decay,
+            nesterov=True,
         )
     elif train_args.optimizer in ["adam", "adamw"]:
         optimizer = torchopt.adamw(
-            train_args.learning_rate,
+            lr,
             betas=(train_args.adam_beta1, train_args.adam_beta2),
             weight_decay=train_args.weight_decay,
             use_accelerated_op=True,
