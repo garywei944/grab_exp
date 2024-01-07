@@ -347,11 +347,9 @@ def main():
         else model_args.config_name.split("/")[-1]
     )
     wandb.init(
-        project=f"grab-{model_name}-{data_args.dataset_name}"
-        if grab_args.wandb_project is None
-        else grab_args.wandb_project,
+        project=f"grab-{model_name}-{data_args.dataset_name}",
         entity="grab",
-        mode="online" if grab_args.use_wandb else "offline",
+        mode="online",
         config={
             **vars(model_args),
             **vars(data_args),
@@ -648,10 +646,10 @@ def main():
         dtype=dtype,
         device=device,
         timer=timer,
-        record_herding=grab_args.record_grads,
+        record_herding=grab_args.report_grads,
         stale_mean_herding=False,
         cuda_herding=not grab_args.cpu_herding,
-        record_norm=grab_args.record_grads,
+        record_norm=grab_args.report_grads,
         **vars(grab_args),
     )
 
@@ -803,7 +801,7 @@ def main():
                 }
             )
 
-            if grab_args.record_grads:
+            if grab_args.report_grads:
                 grad_norms = sampler.sorter.grad_norms
 
                 # Save the norms
@@ -864,7 +862,7 @@ def main():
                 f'train: {pretty_time(timer["train"][-1])} '
                 f'val: {pretty_time(timer["val"][-1])}'
             )
-            if grab_args.record_grads:
+            if grab_args.report_grads:
                 log_msg += (
                     f" | norm_mean: {norm_mean:.2f} "
                     f"norm_std: {norm_std:.2f} "
@@ -880,7 +878,7 @@ def main():
             torch.save(model.state_dict(), checkpoint_path / checkpoint_name)
 
         if epoch > 0:
-            if grab_args.record_grads:
+            if grab_args.report_grads:
                 # Save the grad norms
                 df_grad_norms.describe().to_csv(
                     checkpoint_path / f"{exp_id}_{epochs}_grad_norms_proc.csv"
@@ -901,7 +899,7 @@ def main():
 
     print(torch.cuda.memory_summary())
 
-    if grab_args.record_grads:
+    if grab_args.report_grads:
         print("-" * 50)
         print(df_grad_norms.describe())
 
@@ -923,7 +921,7 @@ def main():
     # Save the timer
     timer.save(checkpoint_path / f"{exp_id}_{epochs}_timer.pt")
     timer.summary().to_csv(checkpoint_path / f"{exp_id}_{epochs}_timer.csv")
-    if grab_args.record_grads:
+    if grab_args.report_grads:
         # Save the grad norms
         df_grad_norms.describe().to_csv(
             checkpoint_path / f"{exp_id}_{epochs}_grad_norms.csv"
@@ -996,8 +994,8 @@ def get_exp_id(
         f"_b_{training_args.train_batch_size}_seed_{training_args.seed}"
     )
 
-    if grab_args.normalize_grads:
-        exp_id += "_norm"
+    # if grab_args.normalize_grads:
+    #     exp_id += "_norm"
     if grab_args.random_projection:
         exp_id += f"_pi_{grab_args.random_projection_eps}"
     if grab_args.prob_balance:

@@ -12,13 +12,13 @@ for seed in 0; do
   #   --data.train_batch_size 256 \
   #   --data.data_augmentation basic \
   #   --model.norm gn
-  sbatch --gres=gpu:2080ti:4 \
+  sbatch --gres=gpu:a5000:2 \
     scripts/lightning/cv/sam.job \
-    python experiments/lightning/cv/cv_sam.py \
+    python experiments/lightning/cv/cv.py \
     --seed $seed \
-    --data.train_batch_size 64 \
+    --data.train_batch_size 128 \
     --data.data_augmentation none \
-    --model.norm gn
+    --model.norm in
   # sbatch --gres=gpu:a6000 \
   #   scripts/lightning/cv/sam.job \
   #   python experiments/lightning/cv/cv.py \
