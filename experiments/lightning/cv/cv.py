@@ -12,14 +12,13 @@ from lightning.pytorch.callbacks import (
 from torchmetrics import Accuracy
 
 from datetime import datetime
+from functools import partial
 
 from datamodules import CVDataModule, CIFAR10DataModule
 
 from cd2root import cd2root
 
 cd2root()
-
-from experiments.cv.models import WRN
 
 
 class Model(L.LightningModule):
@@ -52,7 +51,25 @@ class Model(L.LightningModule):
         self.save_hyperparameters()
 
         if self.model_name == "wrn":
+            from experiments.cv.models import WRN
+
             self.model = WRN(n_classes=self.num_classes, norm=self.norm)
+        elif self.model_name == "resnet":
+            from torchvision.models import resnet18
+
+            if self.norm == "bn":
+                layer_norm = nn.BatchNorm2d
+            elif self.norm == "gn":
+                layer_norm = partial(nn.GroupNorm, 32)
+            elif self.norm == "in":
+                layer_norm = nn.InstanceNorm3d
+            else:
+                raise NotImplementedError
+
+            self.model = resnet18(
+                num_classes=self.num_classes,
+                norm_layer=layer_norm,
+            )
         else:
             raise NotImplementedError
 
@@ -197,12 +214,12 @@ def main():
         gradient_clip_val=5.0,
         logger=[
             TensorBoardLogger("lightning_logs", name=model_name),
-            WandbLogger(
-                project=f"sam-cifar10",
-                name=model_name,
-                entity="grab",
-                mode="online",
-            ),
+            # WandbLogger(
+            #     project=f"sam-cifar10",
+            #     name=model_name,
+            #     entity="grab",
+            #     mode="online",
+            # ),
             CSVLogger("logs", name=model_name),
         ],
         callbacks=[

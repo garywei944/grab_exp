@@ -59,6 +59,7 @@ class Model(L.LightningModule):
         adam_beta1: float = 0.9,
         adam_beta2: float = 0.999,
         milestones: list[int] = None,
+        norm: str = "bn",
     ):
         super().__init__()
 
@@ -73,11 +74,23 @@ class Model(L.LightningModule):
         self.adam_beta1 = adam_beta1
         self.adam_beta2 = adam_beta2
         self.milestones = milestones
+        self.norm = norm
 
         self.save_hyperparameters(ignore="dm")
 
         if self.model_name == "wrn":
-            self.model = WRN(n_classes=self.num_classes, norm="gn")
+            self.model = WRN(n_classes=self.num_classes, norm=self.norm)
+        elif self.model_name == "resnet":
+            if self.norm == "bn":
+                from torchvision.models import resnet18
+
+                self.model = resnet18(num_classes=self.num_classes)
+            elif self.norm == "gn":
+                from experiments.cv.models import resnet18
+
+                self.model = resnet18(num_classes=self.num_classes)
+            else:
+                raise NotImplementedError
         else:
             raise NotImplementedError
 

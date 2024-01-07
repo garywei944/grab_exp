@@ -20,6 +20,8 @@ from cd2root import cd2root
 
 cd2root()
 
+from experiments.cv.models import resnet18
+
 
 class CIFAR10DataModule(L.LightningDataModule):
     cifar10_train: Dataset
@@ -69,19 +71,12 @@ class CIFAR10DataModule(L.LightningDataModule):
             self.cifar10_train,
             batch_size=self.hparams.batch_size,
             shuffle=self.hparams.shuffle,
-            num_workers=self.hparams.num_workers,
-            pin_memory=self.hparams.pin_memory,
-            drop_last=self.hparams.drop_last,
-            persistent_workers=False,
         )
 
     def val_dataloader(self):
         return DataLoader(
             self.cifar10_val,
             batch_size=self.hparams.batch_size,
-            num_workers=self.hparams.num_workers,
-            pin_memory=self.hparams.pin_memory,
-            persistent_workers=False,
         )
 
 
@@ -99,9 +94,7 @@ class LitClassifier(L.LightningModule):
         super().__init__()
 
         self.save_hyperparameters()
-        self.model = torchvision.models.resnet18(
-            num_classes=10, norm_layer=nn.InstanceNorm3d
-        )
+        self.model = resnet18(num_classes=10)
         self.loss_fn = nn.CrossEntropyLoss()
 
         self.fparams = dict(self.model.named_parameters())
@@ -224,6 +217,8 @@ def multi_step_lr(
 
 def main():
     dm = CIFAR10DataModule()
+    dm.prepare_data()
+    dm.setup()
     model = LitClassifier()
 
     trainer = L.Trainer(

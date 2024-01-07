@@ -342,21 +342,24 @@ def train(
     for x, y in train_loader:
         x = x.to(device)
         y = y.to(device)
-        ft_per_sample_grads, (batch_loss, logits) = ft_compute_sample_grad_and_loss(
+        ft_per_sample_grads, (batch_loss, _) = ft_compute_sample_grad_and_loss(
             params, buffers, x, y
         )
 
         sampler.step(ft_per_sample_grads)
 
         grads = {k: g.mean(dim=0) for k, g in ft_per_sample_grads.items()}
-        updates, opt_state = optimizer.update(
-            grads, opt_state, params=params
+
+        del ft_per_sample_grads
+
+        _, opt_state = optimizer.update(
+            grads, opt_state, params=params, inplace=True
         )  # get updates
-        params = torchopt.apply_updates(params, updates)  # update network parameters
+        # params = torchopt.apply_updates(params, updates)  # update network parameters
 
         running_loss += batch_loss.sum().item()
         n += len(batch_loss)
-        metric.add_batch(predictions=logits.argmax(dim=-1), references=y)
+        # metric.add_batch(predictions=logits.argmax(dim=-1), references=y)
 
         pbar.update(1)
 
@@ -520,7 +523,7 @@ def main():
         leave=False,
         disable=not train_args.tqdm,
     )
-    for epoch in range(train_args.epochs + 1):
+    for epoch in range(0 if train_args.log_first_step else 1, train_args.epochs + 1):
         logs = {
             "epoch": epoch,
             "iteration": epoch * len(train_loader),
