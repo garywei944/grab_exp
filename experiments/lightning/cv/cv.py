@@ -1,3 +1,4 @@
+from ast import alias
 import torch
 from torch import nn, Tensor
 
@@ -153,11 +154,20 @@ class Model(L.LightningModule):
         #     num_warmup_steps=0,
         #     num_training_steps=self.trainer.max_steps,
         # )
-        scheduler = torch.optim.lr_scheduler.MultiStepLR(
-            optimizer,
-            milestones=[60, 120, 160],
-            gamma=0.2,
-        )
+        if self.model_name == "wrn":
+            scheduler = torch.optim.lr_scheduler.MultiStepLR(
+                optimizer,
+                milestones=[60, 120, 160],
+                gamma=0.2,
+            )
+        elif self.model_name == "resnet":
+            scheduler = torch.optim.lr_scheduler.MultiStepLR(
+                optimizer,
+                milestones=[100, 150],
+                gamma=0.1,
+            )
+        else:
+            raise NotImplementedError
 
         return {
             "optimizer": optimizer,
@@ -181,6 +191,16 @@ def parse_args():
     parser.add_argument(
         "--ckpt",
         type=str,
+        default=None,
+    )
+    parser.add_argument(
+        "--wandb_project",
+        type=str,
+        default="sam-cifar10",
+    )
+    parser.add_argument(
+        "--grad_clip",
+        type=float,
         default=None,
     )
 
@@ -211,15 +231,15 @@ def main():
         max_epochs=args.epochs,
         check_val_every_n_epoch=1,
         # val_check_interval=args.val_interval,
-        gradient_clip_val=5.0,
+        gradient_clip_val=args.grad_clip,
         logger=[
             TensorBoardLogger("lightning_logs", name=model_name),
-            # WandbLogger(
-            #     project=f"sam-cifar10",
-            #     name=model_name,
-            #     entity="grab",
-            #     mode="online",
-            # ),
+            WandbLogger(
+                project=args.wandb_project,
+                name=model_name,
+                entity="grab",
+                mode="online",
+            ),
             CSVLogger("logs", name=model_name),
         ],
         callbacks=[

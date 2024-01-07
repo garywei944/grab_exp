@@ -8,7 +8,7 @@
 #SBATCH --mem=64g                            # server memory requested (per node)
 #SBATCH -t 02-00:00:00                           # Time limit (hh:mm:ss)
 #SBATCH --partition=gpu,desa                     # Request partition
-#SBATCH --gres=gpu:a5000:1                # Type/number of GPUs needed
+#SBATCH --gres=gpu:a6000:1                # Type/number of GPUs needed
 
 CMD="python experiments/nlp/clm/clm.py $*"
 

@@ -42,6 +42,7 @@ class SAMModel(Model):
         adam_beta2: float = 0.999,
         rho: float = 0.05,
         norm: str = "bn",
+        gradient_clip_val: float = None,
     ):
         super().__init__(
             dm=dm,
@@ -55,6 +56,7 @@ class SAMModel(Model):
             norm=norm,
         )
         self.rho = rho
+        self.gradient_clip_val = gradient_clip_val
 
         self.save_hyperparameters(ignore="dm")
 
@@ -69,9 +71,12 @@ class SAMModel(Model):
             disable_running_stats(self)
             loss = self.loss_fn(self(x), y)
             self.manual_backward(loss)
-            self.clip_gradients(
-                opt, gradient_clip_val=5.0, gradient_clip_algorithm="norm"
-            )
+            if self.gradient_clip_val:
+                self.clip_gradients(
+                    opt,
+                    gradient_clip_val=self.gradient_clip_val,
+                    gradient_clip_algorithm="norm",
+                )
             return loss
 
         # First back-prop
@@ -142,11 +147,20 @@ class SAMModel(Model):
         #     num_warmup_steps=0,
         #     num_training_steps=self.trainer.max_steps,
         # )
-        scheduler = torch.optim.lr_scheduler.MultiStepLR(
-            optimizer,
-            milestones=[60, 120, 160],
-            gamma=0.2,
-        )
+        if self.model_name == "wrn":
+            scheduler = torch.optim.lr_scheduler.MultiStepLR(
+                optimizer,
+                milestones=[60, 120, 160],
+                gamma=0.2,
+            )
+        elif self.model_name == "resnet":
+            scheduler = torch.optim.lr_scheduler.MultiStepLR(
+                optimizer,
+                milestones=[100, 150],
+                gamma=0.1,
+            )
+        else:
+            raise NotImplementedError
 
         return {
             "optimizer": optimizer,
@@ -173,6 +187,11 @@ def parse_args():
         "--epochs",
         type=int,
         default=200,
+    )
+    parser.add_argument(
+        "--wandb_project",
+        type=str,
+        default="sam-cifar10",
     )
 
     parser.add_lightning_class_args(SAMModel, "model")
@@ -209,7 +228,7 @@ def main():
         logger=[
             TensorBoardLogger("lightning_logs", name=model_name),
             WandbLogger(
-                project=f"sam-cifar10",
+                project=args.wandb_project,
                 name=model_name,
                 entity="grab",
                 mode="online",

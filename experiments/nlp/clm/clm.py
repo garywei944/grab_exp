@@ -300,7 +300,7 @@ def validate(eval_loader, model, device="cuda", disable_tqdm=False):
             b = v.size(0)
             break
         outputs = model(**batch)
-        loss = outputs.loss_fn
+        loss = outputs.loss
         losses.append(loss.repeat(b))
     losses = torch.cat(losses)
 
