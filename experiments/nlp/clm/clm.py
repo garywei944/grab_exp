@@ -951,7 +951,7 @@ def compute_loss(model, params, buffers, kwargs):
         kwargs=kwargs,
     )
 
-    return out.loss_fn
+    return out.loss
 
 
 def get_lr_scheduler(learning_rate, num_warmup_steps, num_training_steps, min_lr):

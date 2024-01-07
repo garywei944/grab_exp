@@ -76,7 +76,7 @@ class Args:
         },
     )
     wrn_norm: str = field(
-        default="in",
+        default="gn",
         metadata={
             "choices": ["in", "bn", "gn"],
             "help": "Norm type for ResNet",
