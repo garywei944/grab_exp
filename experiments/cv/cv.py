@@ -3,6 +3,7 @@
 # Gary Wei github.com/garywei944
 
 from functools import partial
+from typing import Callable
 
 import evaluate
 import numpy as np
@@ -299,9 +300,9 @@ def get_model(
 
 def get_optimizer(
     train_args: TrainArgs, milestones: list[int], gamma: float = 0.1
-) -> GradientTransformation:
+) -> tuple[GradientTransformation, (Callable | float)]:
     if train_args.scheduler == "constant":
-        lr = train_args.learning_rate
+        lr = lambda x: train_args.learning_rate
     elif train_args.scheduler == "multi_step_lr":
         lr = multi_step_lr(
             train_args.learning_rate,
@@ -329,7 +330,7 @@ def get_optimizer(
     else:
         raise ValueError("Unknown optimizer")
 
-    return optimizer
+    return optimizer, lr
 
 
 def compute_loss(
@@ -360,9 +361,10 @@ def train(
     metric: evaluate.EvaluationModule,
     pbar: tqdm,
     device: torch.device = torch.device("cuda"),
-):
+    scheduler: callable = None,  # Only for debugging
+) -> tuple[float, dict[str, nn.Parameter], dict[str, Tensor]]:
     running_loss, n = 0, 0
-    for x, y in train_loader:
+    for i, (x, y) in enumerate(train_loader):
         x = x.to(device)
         y = y.to(device)
         ft_per_sample_grads, (batch_loss, _) = ft_compute_sample_grad_and_loss(
@@ -373,12 +375,16 @@ def train(
 
         grads = {k: g.mean(dim=0) for k, g in ft_per_sample_grads.items()}
 
-        del ft_per_sample_grads
-
         updates, opt_state = optimizer.update(
             grads, opt_state, params=params
         )  # get updates
         params = torchopt.apply_updates(params, updates)  # update network parameters
+
+        if scheduler is not None:
+            step = opt_state[-1].count[0].item()
+            lr = scheduler(step)
+            wandb.log({"lr": lr}, step=step)
+            # print(f"step: {step} lr: {lr:.3e}")
 
         running_loss += batch_loss.sum().item()
         n += len(batch_loss)
@@ -386,7 +392,8 @@ def train(
 
         pbar.update(1)
 
-    return running_loss / n
+    # TODO: maybe submit a github Issue that the count is not updated in opt_state
+    return running_loss / n, params, opt_state
 
 
 # validation function
@@ -421,12 +428,7 @@ def main():
     ).parse_args_into_dataclasses()
 
     # Init wandb
-    config = {
-        **vars(args),
-        **vars(grab_args),
-        **vars(train_args),
-    }
-    config["batch_grad"] = False
+    config = {**vars(args), **vars(grab_args), **vars(train_args), "batch_grad": False}
     wandb.init(
         project=f"grab-{args.dataset_name}"
         if train_args.wandb_project is None
@@ -545,10 +547,10 @@ def main():
         ]
         gamma = 0.2
     else:
-        milestones = None
+        milestones = [0]
         gamma = 1.0
 
-    optimizer = get_optimizer(
+    optimizer, scheduler = get_optimizer(
         train_args,
         milestones=milestones,
         gamma=gamma,
@@ -578,7 +580,7 @@ def main():
 
         if epoch != 0:
             with timer("train"):
-                train_loss = train(
+                train_loss, params, opt_state = train(
                     train_loader=train_loader,
                     sampler=sampler,
                     params=params,
@@ -589,6 +591,7 @@ def main():
                     metric=train_metric,
                     pbar=pbar,
                     device=device,
+                    scheduler=scheduler,
                 )
             # train_acc = train_metric.compute()["accuracy"]
             # train_acc = 0.0

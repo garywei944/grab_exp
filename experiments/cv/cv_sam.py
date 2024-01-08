@@ -253,10 +253,10 @@ def train(
     device: torch.device = torch.device("cuda"),
     adaptive: bool = False,
     rho: float = 0.05,
-):
+) -> tuple[float, dict[str, nn.Parameter], dict[str, Tensor]]:
     sampler.reset()
     running_loss, n = 0, 0
-    for x, y in train_loader:
+    for i, (x, y) in enumerate(train_loader):
         x = x.to(device)
         y = y.to(device)
 
@@ -322,7 +322,7 @@ def train(
 
         pbar.update(1)
 
-    return running_loss / n / 2
+    return running_loss / n / 2, params, opt_state
 
 
 def main():
@@ -468,10 +468,10 @@ def main():
         ]
         gamma = 0.2
     else:
-        milestones = None
+        milestones = [0]
         gamma = 1.0
 
-    optimizer = get_optimizer(
+    optimizer, _ = get_optimizer(
         train_args,
         milestones=milestones,
         gamma=gamma,
@@ -502,7 +502,7 @@ def main():
 
         if epoch != 0:
             with timer("train"):
-                train_loss = train(
+                train_loss, params, opt_state = train(
                     train_loader=train_loader,
                     sampler=sampler,
                     params=params,
