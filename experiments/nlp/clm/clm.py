@@ -281,7 +281,7 @@ def train(
         if completed_steps >= max_steps:
             break
 
-    return torch.cat(losses).mean(), completed_steps
+    return torch.cat(losses).mean(), completed_steps, params, opt_state
 
 
 @torch.no_grad()
@@ -700,7 +700,7 @@ def main():
                 training_args.learning_rate,
                 warmup_steps,
                 max_steps,
-                training_args.learning_rate / 10,
+                # training_args.learning_rate / 10,
             ),
             betas=(training_args.adam_beta1, training_args.adam_beta2),
             weight_decay=training_args.weight_decay,
@@ -763,7 +763,7 @@ def main():
 
             with timer(f"train"):
                 # perform training (single loop over the train dataloader)
-                train_loss, completed_steps = train(
+                train_loss, completed_steps, params, opt_state = train(
                     train_loader=train_loader,
                     sampler=sampler,
                     model=model,
@@ -954,7 +954,7 @@ def compute_loss(model, params, buffers, kwargs):
     return out.loss
 
 
-def get_lr_scheduler(learning_rate, num_warmup_steps, num_training_steps, min_lr):
+def get_lr_scheduler(learning_rate, num_warmup_steps, num_training_steps, min_lr=0):
     def func(it: int):
         # 1) linear warmup for warmup_iters steps
         if it < num_warmup_steps:
