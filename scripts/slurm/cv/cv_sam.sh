@@ -36,29 +36,34 @@
 DATASET=cifar10
 mkdir -p logs/$DATASET
 
-for seed in 1 2 3 4 5; do
-  for lr in 0.01; do
-    for wd in 0.01; do
-      for balance in rr mean; do
-        for rho in 0.02; do
-          sbatch -J $DATASET scripts/slurm/cv/cv_sam.job \
-            -d $DATASET \
-            -model lenet \
-            -bt $balance \
-            --seed $seed \
-            --random_first_epoch 1 \
-            --epochs 100 \
-            -opt sgd \
-            -lr $lr \
-            -wd $wd \
-            -m 0 \
-            -b 16 \
-            -eb 1024 \
-            --report_grads 0 \
-            --cpu_herding \
-            --log_first_step 0 \
-            --rho $rho \
-            --adaptive 1
+for seed in 0; do
+  for lr in 0.1; do
+    for wd in 0; do
+      for balance in mean; do
+        for rho in 0.1; do
+          for da in basic; do
+            sbatch -J $DATASET scripts/slurm/cv/cv_sam.job \
+              -d $DATASET \
+              -model resnet \
+              -bt $balance \
+              --seed $seed \
+              --random_first_epoch 1 \
+              --epochs 200 \
+              -opt sgd \
+              -lr $lr \
+              -wd $wd \
+              -m 0.9 \
+              -b 128 \
+              -eb 1024 \
+              --report_grads 0 \
+              --cpu_herding \
+              --log_first_step 0 \
+              --wandb_project sam-cifar10 \
+              -sch multi_step_lr \
+              --rho $rho \
+              --adaptive 0 \
+              -da $da
+          done
         done
       done
     done
