@@ -9,7 +9,8 @@ import torch.onnx
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import functorch as ft
+from torch.func import vmap, grad
+# import pdb; pdb.set_trace()
 
 
 # 2. Load in the text data
@@ -139,14 +140,21 @@ def repackage_hidden(h):
         return tuple(repackage_hidden(v) for v in h)
     
 def per_sample_grads(model, data, targets):
+    data = data.long()  # assuming data is used for embeddings
+    targets = targets.float()
+
     def compute_loss(input, target):
-        output, _ = model(input, model.init_hidden(1))
-        loss = criterion(output, target)
+        output, _ = model(input.unsqueeze(0), model.init_hidden(1))
+        loss = criterion(output.view(-1, model.ntoken), target)
         return loss
 
-    vmap_grad = ft.vmap(ft.grad(compute_loss))
+    # Use vmap to compute gradients per sample
+    vmap_grad = torch.func.vmap(torch.func.grad(compute_loss), in_dims=(0, 0))
     batch_grads = vmap_grad(data, targets)
+
     return batch_grads
+
+
 
 # eval_batch_size = 10
 corpus = Corpus(args.data)
@@ -172,7 +180,8 @@ def train():
    
     for batch, i in enumerate(range(0, train_data.size(0) - 1, args.bptt)):
         data, targets = get_batch(train_data, i)
-
+        targets = targets.float()
+        targets = targets.float()
             # Compute per sample gradients
         batch_grads = per_sample_grads(model, data, targets)
 
