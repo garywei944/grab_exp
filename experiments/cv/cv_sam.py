@@ -32,6 +32,14 @@ cd2root()
 
 from experiments.utils.func_helpers import make_func_params
 from experiments.utils.arguments import GraBArgs, TrainArgs
+from experiments.cv.cv import (
+    get_optimizer,
+    get_dataset,
+    compute_loss,
+    get_model,
+    get_exp_id,
+    validate,
+)
 
 DATASETS = ["mnist", "fashion_mnist", "cifar10", "cifar100"]
 MODELS = ["lr", "lenet", "resnet", "minnet", "wrn"]
@@ -214,218 +222,21 @@ class Args:
             "help": "Rho for SAM",
         },
     )
-
-
-def get_exp_id(args: Args, grab_args: GraBArgs, train_args: TrainArgs) -> str:
-    # Unique experiment name for checkpoints
-    exp_id = (
-        f"{args.dataset_name}_{args.model_name}_{grab_args.balance_type}"
-        f"_{train_args.optimizer}_lr_{train_args.learning_rate}"
-        f"_wd_{train_args.weight_decay}"
-        f"_b_{train_args.train_batch_size}_seed_{train_args.seed}"
+    wrn_norm: str = field(
+        default="gn",
+        metadata={
+            "choices": ["in", "bn", "gn"],
+            "help": "Norm type for ResNet",
+        },
     )
-
-    if grab_args.normalize_grad:
-        exp_id += "_norm"
-    if grab_args.random_projection:
-        exp_id += f"_pi_{grab_args.random_projection_eps}"
-    if grab_args.prob_balance:
-        exp_id += f"_prob_{grab_args.prob_balance_c:.1f}"
-    if grab_args.balance_type in [
-        BalanceType.RECURSIVE_BALANCE,
-        BalanceType.RECURSIVE_PAIR_BALANCE,
-    ]:
-        exp_id += f"_depth_{grab_args.depth}"
-    if not grab_args.random_first_epoch:
-        exp_id += "_no_rr"
-    if grab_args.balance_type == BalanceType.EMA_BALANCE:
-        exp_id += f"_ema_{grab_args.ema_decay}"
-
-    return exp_id
-
-
-def get_dataset(args: Args) -> tuple[Dataset, Dataset, int, int]:
-    # Load the dataset
-    if args.dataset_name == "mnist":
-        if args.model_name == "lr":
-            transform = transforms.Compose(
-                [
-                    transforms.ToTensor(),
-                    transforms.Normalize((0.1307,), (0.3081,)),
-                    transforms.Lambda(lambda x: x.view(-1)),
-                ]
-            )
-        else:
-            transform = transforms.Compose(
-                [transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,))]
-            )
-        train_dataset = datasets.MNIST(
-            root="data/external", train=True, download=True, transform=transform
-        )
-        test_dataset = datasets.MNIST(
-            root="data/external", train=False, transform=transform
-        )
-
-        in_dim, num_classes = 784, 10
-    elif args.dataset_name == "fashion_mnist":
-        # https://www.kaggle.com/code/leifuer/intro-to-pytorch-fashion-mnist
-        # Define a transform to normalize the data
-        if args.model_name == "lr":
-            transform = transforms.Compose(
-                [
-                    transforms.ToTensor(),
-                    transforms.Normalize((0.5,), (0.5,)),
-                    transforms.Lambda(lambda x: x.view(-1)),
-                ]
-            )
-        else:
-            transform = transforms.Compose(
-                [transforms.ToTensor(), transforms.Normalize((0.5,), (0.5,))]
-            )
-        # Download and load the training data
-        train_dataset = datasets.FashionMNIST(
-            "data/external", download=True, train=True, transform=transform
-        )
-        # Download and load the test data
-        test_dataset = datasets.FashionMNIST(
-            "data/external", download=True, train=False, transform=transform
-        )
-
-        in_dim, num_classes = 784, 10
-    elif args.dataset_name == "cifar10":
-        transform = transforms.Compose(
-            [
-                transforms.ToTensor(),
-                transforms.Normalize(
-                    mean=[0.49139968, 0.48215841, 0.44653091],
-                    std=[0.24703223, 0.24348513, 0.26158784],
-                ),
-            ]
-        )
-
-        # Loading the dataset and preprocessing
-        train_dataset = datasets.CIFAR10(
-            root="data/external", train=True, download=True, transform=transform
-        )
-        test_dataset = datasets.CIFAR10(
-            root="data/external", train=False, download=True, transform=transform
-        )
-
-        in_dim, num_classes = 3, 10
-
-    elif args.dataset_name == "cifar100":
-        transform = transforms.Compose(
-            [
-                transforms.ToTensor(),
-                transforms.Normalize(
-                    mean=[0.50707516, 0.48654887, 0.44091784],
-                    std=[0.26733429, 0.25643846, 0.27615047],
-                ),
-            ]
-        )
-
-        # Loading the dataset and preprocessing
-        train_dataset = datasets.CIFAR100(
-            root="data/external", train=True, download=True, transform=transform
-        )
-        test_dataset = datasets.CIFAR100(
-            root="data/external", train=False, download=True, transform=transform
-        )
-
-        in_dim, num_classes = 3, 100
-    else:
-        raise ValueError
-
-    # Use a subset of training examples
-    if args.num_train_examples is not None:
-        train_dataset = Subset(train_dataset, range(args.num_train_examples))
-    if args.num_test_examples is not None:
-        test_dataset = Subset(test_dataset, range(args.num_test_examples))
-
-    return train_dataset, test_dataset, in_dim, num_classes
-
-
-def get_model(
-    args: Args, train_args: TrainArgs, in_dim: int, num_classes: int
-) -> tuple[nn.Module, dict[str, nn.Parameter], dict[str, Tensor], nn.Module]:
-    device = train_args.device
-
-    # Load the model
-    # enforce that the same seed use the same model initialization
-    if train_args.seed is not None:
-        set_seed(train_args.seed)
-    if args.model_name == "lr":
-        assert args.dataset_name in ["mnist", "fashion_mnist"]
-
-        model = nn.Linear(in_dim, num_classes).to(device)
-    elif args.model_name == "lenet":
-        assert args.dataset_name in ["cifar10", "cifar100"]
-        from models import LeNet
-
-        model = LeNet(in_dim, num_classes).to(device)
-    elif args.model_name == "resnet":
-        assert args.dataset_name == "cifar10"
-        from models import ResNet
-
-        model = ResNet(
-            depth=args.resnet_depth, num_classes=num_classes, norm_type="in"
-        ).to(device)
-    elif args.model_name == "minnet":
-        assert args.dataset_name in ["mnist", "fashion_mnist"]
-        from models import MinNet
-
-        model = MinNet().to(device)
-    # elif args.model_name == "wrn":
-    #     assert args.dataset_name == "cifar10"
-    #     from models import WRN
-    #
-    #     model = WRN().to(device)
-    else:
-        raise ValueError
-    # Transform everything to functional programming
-
-    # Get params
-    params, buffers = make_func_params(model)
-    loss_fn = nn.CrossEntropyLoss()
-
-    return model, params, buffers, loss_fn
-
-
-def get_optimizer(train_args: TrainArgs) -> GradientTransformation:
-    # Initiate optimizer
-    if train_args.optimizer == "sgd":
-        optimizer = torchopt.sgd(
-            train_args.learning_rate,
-            momentum=train_args.momentum,
-            weight_decay=train_args.weight_decay,
-        )
-    elif train_args.optimizer in ["adam", "adamw"]:
-        optimizer = torchopt.adamw(
-            train_args.learning_rate,
-            betas=(train_args.adam_beta1, train_args.adam_beta2),
-            weight_decay=train_args.weight_decay,
-            use_accelerated_op=True,
-        )
-    else:
-        raise ValueError("Unknown optimizer")
-
-    return optimizer
-
-
-def compute_loss(
-    model: nn.Module,
-    loss_fn: nn.Module,
-    params: dict[str, nn.Parameter],
-    buffers: dict[str, Tensor],
-    inputs: Tensor,
-    targets: Tensor,
-):
-    inputs = inputs.unsqueeze(0)
-    targets = targets.unsqueeze(0)
-
-    logits = functional_call(model, (params, buffers), (inputs,))
-
-    return loss_fn(logits, targets), logits
+    data_augmentation: str = field(
+        default="none",
+        metadata={
+            "aliases": ["-da"],
+            "choices": ["none", "basic"],
+            "help": "Data augmentation",
+        },
+    )
 
 
 @torch.no_grad()
@@ -442,10 +253,10 @@ def train(
     device: torch.device = torch.device("cuda"),
     adaptive: bool = False,
     rho: float = 0.05,
-):
+) -> tuple[float, dict[str, nn.Parameter], dict[str, Tensor]]:
     sampler.reset()
     running_loss, n = 0, 0
-    for x, y in train_loader:
+    for i, (x, y) in enumerate(train_loader):
         x = x.to(device)
         y = y.to(device)
 
@@ -511,30 +322,7 @@ def train(
 
         pbar.update(1)
 
-    return running_loss / n / 2
-
-
-# validation function
-@torch.no_grad()
-def validate(
-    test_loader: DataLoader,
-    model: nn.Module,
-    loss_fn: nn.Module,
-    metric: evaluate.EvaluationModule,
-    no_tqdm: bool = False,
-    device: torch.device = torch.device("cuda"),
-):
-    running_loss, n = 0, 0
-    # look over the validation dataloader
-    for x, y in tqdm(test_loader, leave=False, disable=no_tqdm):
-        x = x.to(device)
-        y = y.to(device)
-        outputs = model(x)
-        loss = loss_fn(outputs, y)
-        running_loss += loss.item() * x.shape[0]
-        n += x.shape[0]
-        metric.add_batch(predictions=outputs.argmax(dim=-1), references=y)
-    return running_loss / n
+    return running_loss / n / 2, params, opt_state
 
 
 def main():
@@ -556,6 +344,7 @@ def main():
         project=f"grab-{args.dataset_name}"
         if train_args.wandb_project is None
         else train_args.wandb_project,
+        name=f"sam-{args.model_name}-da_{args.data_augmentation}-func",
         entity="grab",
         mode="online" if train_args.wandb else "offline",
         config=config,
@@ -593,10 +382,6 @@ def main():
 
     # Initiate model
     model, params, buffers, loss_fn = get_model(args, train_args, in_dim, num_classes)
-
-    # Initiate optimizer
-    optimizer = get_optimizer(train_args)
-    opt_state = optimizer.init(params)
 
     # Initiate sampler
     d = sum(p[1].numel() for p in model.named_parameters())
@@ -666,6 +451,33 @@ def main():
         num_workers=train_args.num_workers,
     )
 
+    # Initiate optimizer
+    steps_per_epoch = len(train_loader)
+
+    if args.model_name == "resnet":
+        milestones = [
+            0.5 * train_args.epochs * steps_per_epoch,
+            0.75 * train_args.epochs * steps_per_epoch,
+        ]
+        gamma = 0.1
+    elif args.model_name == "wrn":
+        milestones = [
+            60 * steps_per_epoch,
+            120 * steps_per_epoch,
+            160 * steps_per_epoch,
+        ]
+        gamma = 0.2
+    else:
+        milestones = [0]
+        gamma = 1.0
+
+    optimizer, _ = get_optimizer(
+        train_args,
+        milestones=milestones,
+        gamma=gamma,
+    )
+    opt_state = optimizer.init(params)
+
     ft_compute_sample_grad_and_loss = vmap(
         grad_and_value(partial(compute_loss, model, loss_fn), has_aux=True),
         in_dims=(None, None, 0, 0),
@@ -690,7 +502,7 @@ def main():
 
         if epoch != 0:
             with timer("train"):
-                train_loss = train(
+                train_loss, params, opt_state = train(
                     train_loader=train_loader,
                     sampler=sampler,
                     params=params,
@@ -704,11 +516,11 @@ def main():
                     adaptive=args.adaptive,
                     rho=args.rho,
                 )
-            train_acc = train_metric.compute()["accuracy"]
+            # train_acc = train_metric.compute()["accuracy"]
             logs.update(
                 {
                     "train_loss": train_loss,
-                    "train_accuracy": train_acc,
+                    # "train_accuracy": train_acc,
                     "train_time": timer["train"][-1],
                 }
             )
@@ -780,7 +592,7 @@ def main():
             log_msg = (
                 f"Epoch: {epoch} | "
                 f"train loss: {train_loss :.3f} "
-                f"acc: {train_acc:.3f} | "
+                # f"acc: {train_acc:.3f} | "
                 f"train_eval loss: {train_eval_loss :.3f} "
                 f"acc : {train_eval_acc:.3f} | "
                 f"val loss: {val_loss :.3f} "

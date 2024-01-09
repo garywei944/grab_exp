@@ -3,6 +3,7 @@
 # Gary Wei github.com/garywei944
 
 from functools import partial
+from typing import Callable
 
 import evaluate
 import numpy as np
@@ -26,14 +27,17 @@ from torchopt.typing import GradientTransformation
 from grabsampler import GraBSampler, BalanceType
 from grabsampler.utils import EventTimer, pretty_time
 
+from torchopt.schedule import linear_schedule
+
 from cd2root import cd2root
+
 cd2root()
 
 from experiments.utils.func_helpers import make_func_params
 from experiments.utils.arguments import GraBArgs, TrainArgs
 
 DATASETS = ["mnist", "fashion_mnist", "cifar10", "cifar100"]
-MODELS = ["lr", "lenet", "resnet", "minnet"]
+MODELS = ["lr", "lenet", "resnet", "minnet", "wrn"]
 
 
 @dataclass
@@ -74,6 +78,32 @@ class Args:
             "help": "Depth of ResNet",
         },
     )
+    wrn_norm: str = field(
+        default="gn",
+        metadata={
+            "choices": ["in", "bn", "gn"],
+            "help": "Norm type for ResNet",
+        },
+    )
+    data_augmentation: str = field(
+        default="none",
+        metadata={
+            "aliases": ["-da"],
+            "choices": ["none", "basic"],
+            "help": "Data augmentation",
+        },
+    )
+
+
+def multi_step_lr(
+    learning_rate: float,
+    milestones: list[int],
+    gamma: float = 0.1,
+):
+    def _multi_step_lr(step: int):
+        return learning_rate * gamma ** sum(step > m for m in milestones)
+
+    return _multi_step_lr
 
 
 def get_exp_id(args: Args, grab_args: GraBArgs, train_args: TrainArgs) -> str:
@@ -163,9 +193,20 @@ def get_dataset(args: Args) -> tuple[Dataset, Dataset, int, int]:
             ]
         )
 
+        if args.data_augmentation == "basic":
+            train_transform = transforms.Compose(
+                [
+                    transforms.RandomCrop(32, padding=4),
+                    transforms.RandomHorizontalFlip(),
+                    transform,
+                ]
+            )
+        else:
+            train_transform = transform
+
         # Loading the dataset and preprocessing
         train_dataset = datasets.CIFAR10(
-            root="data/external", train=True, download=True, transform=transform
+            root="data/external", train=True, download=True, transform=train_transform
         )
         test_dataset = datasets.CIFAR10(
             root="data/external", train=False, download=True, transform=transform
@@ -225,16 +266,27 @@ def get_model(
         model = LeNet(in_dim, num_classes).to(device)
     elif args.model_name == "resnet":
         assert args.dataset_name == "cifar10"
-        from models import ResNet
+        from models.preact_resnet import PreActResNet18GroupNorm
 
-        model = ResNet(
-            depth=args.resnet_depth, num_classes=num_classes, norm_type="in"
-        ).to(device)
+        # model = ResNet(
+        #     depth=args.resnet_depth, num_classes=num_classes, norm_type="in"
+        # ).to(device)
+        model = PreActResNet18GroupNorm(n_cls=num_classes).to(device)
     elif args.model_name == "minnet":
         assert args.dataset_name in ["mnist", "fashion_mnist"]
         from models import MinNet
 
         model = MinNet().to(device)
+    elif args.model_name == "wrn":
+        assert args.dataset_name in ["cifar10", "cifar100"]
+        from models import WRN
+
+        model = WRN(
+            input_shape=(1, 3, 32, 32),
+            n_classes=num_classes,
+            norm=args.wrn_norm,
+            gn_groups=8,
+        ).to(device)
     else:
         raise ValueError
     # Transform everything to functional programming
@@ -246,17 +298,31 @@ def get_model(
     return model, params, buffers, loss_fn
 
 
-def get_optimizer(train_args: TrainArgs) -> GradientTransformation:
+def get_optimizer(
+    train_args: TrainArgs, milestones: list[int], gamma: float = 0.1
+) -> tuple[GradientTransformation, (Callable | float)]:
+    if train_args.scheduler == "constant":
+        lr = lambda x: train_args.learning_rate
+    elif train_args.scheduler == "multi_step_lr":
+        lr = multi_step_lr(
+            train_args.learning_rate,
+            milestones,
+            gamma=gamma,
+        )
+    else:
+        raise ValueError("Unknown scheduler")
+
     # Initiate optimizer
     if train_args.optimizer == "sgd":
         optimizer = torchopt.sgd(
-            train_args.learning_rate,
+            lr,
             momentum=train_args.momentum,
             weight_decay=train_args.weight_decay,
+            nesterov=True,
         )
     elif train_args.optimizer in ["adam", "adamw"]:
         optimizer = torchopt.adamw(
-            train_args.learning_rate,
+            lr,
             betas=(train_args.adam_beta1, train_args.adam_beta2),
             weight_decay=train_args.weight_decay,
             use_accelerated_op=True,
@@ -264,7 +330,7 @@ def get_optimizer(train_args: TrainArgs) -> GradientTransformation:
     else:
         raise ValueError("Unknown optimizer")
 
-    return optimizer
+    return optimizer, lr
 
 
 def compute_loss(
@@ -295,30 +361,39 @@ def train(
     metric: evaluate.EvaluationModule,
     pbar: tqdm,
     device: torch.device = torch.device("cuda"),
-):
+    scheduler: callable = None,  # Only for debugging
+) -> tuple[float, dict[str, nn.Parameter], dict[str, Tensor]]:
     running_loss, n = 0, 0
-    for x, y in train_loader:
+    for i, (x, y) in enumerate(train_loader):
         x = x.to(device)
         y = y.to(device)
-        ft_per_sample_grads, (batch_loss, logits) = ft_compute_sample_grad_and_loss(
+        ft_per_sample_grads, (batch_loss, _) = ft_compute_sample_grad_and_loss(
             params, buffers, x, y
         )
 
         sampler.step(ft_per_sample_grads)
 
         grads = {k: g.mean(dim=0) for k, g in ft_per_sample_grads.items()}
+
         updates, opt_state = optimizer.update(
             grads, opt_state, params=params
         )  # get updates
         params = torchopt.apply_updates(params, updates)  # update network parameters
 
+        if scheduler is not None:
+            step = opt_state[-1].count[0].item()
+            lr = scheduler(step)
+            wandb.log({"lr": lr}, step=step)
+            # print(f"step: {step} lr: {lr:.3e}")
+
         running_loss += batch_loss.sum().item()
         n += len(batch_loss)
-        metric.add_batch(predictions=logits.argmax(dim=-1), references=y)
+        # metric.add_batch(predictions=logits.argmax(dim=-1), references=y)
 
         pbar.update(1)
 
-    return running_loss / n
+    # TODO: maybe submit a github Issue that the count is not updated in opt_state
+    return running_loss / n, params, opt_state
 
 
 # validation function
@@ -353,16 +428,12 @@ def main():
     ).parse_args_into_dataclasses()
 
     # Init wandb
-    config = {
-        **vars(args),
-        **vars(grab_args),
-        **vars(train_args),
-    }
-    config["batch_grad"] = False
+    config = {**vars(args), **vars(grab_args), **vars(train_args), "batch_grad": False}
     wandb.init(
         project=f"grab-{args.dataset_name}"
         if train_args.wandb_project is None
         else train_args.wandb_project,
+        name=f"{args.model_name}-da_{args.data_augmentation}-func",
         entity="grab",
         mode="online" if train_args.wandb else "offline",
         config=config,
@@ -400,10 +471,6 @@ def main():
 
     # Initiate model
     model, params, buffers, loss_fn = get_model(args, train_args, in_dim, num_classes)
-
-    # Initiate optimizer
-    optimizer = get_optimizer(train_args)
-    opt_state = optimizer.init(params)
 
     # Initiate sampler
     d = sum(p[1].numel() for p in model.named_parameters())
@@ -463,6 +530,33 @@ def main():
         num_workers=train_args.num_workers,
     )
 
+    # Initiate optimizer
+    steps_per_epoch = len(train_loader)
+
+    if args.model_name == "resnet":
+        milestones = [
+            0.5 * train_args.epochs * steps_per_epoch,
+            0.75 * train_args.epochs * steps_per_epoch,
+        ]
+        gamma = 0.1
+    elif args.model_name == "wrn":
+        milestones = [
+            60 * steps_per_epoch,
+            120 * steps_per_epoch,
+            160 * steps_per_epoch,
+        ]
+        gamma = 0.2
+    else:
+        milestones = [0]
+        gamma = 1.0
+
+    optimizer, scheduler = get_optimizer(
+        train_args,
+        milestones=milestones,
+        gamma=gamma,
+    )
+    opt_state = optimizer.init(params)
+
     ft_compute_sample_grad_and_loss = vmap(
         grad_and_value(partial(compute_loss, model, loss_fn), has_aux=True),
         in_dims=(None, None, 0, 0),
@@ -478,7 +572,7 @@ def main():
         leave=False,
         disable=not train_args.tqdm,
     )
-    for epoch in range(train_args.epochs + 1):
+    for epoch in range(0 if train_args.log_first_step else 1, train_args.epochs + 1):
         logs = {
             "epoch": epoch,
             "iteration": epoch * len(train_loader),
@@ -486,7 +580,7 @@ def main():
 
         if epoch != 0:
             with timer("train"):
-                train_loss = train(
+                train_loss, params, opt_state = train(
                     train_loader=train_loader,
                     sampler=sampler,
                     params=params,
@@ -497,12 +591,14 @@ def main():
                     metric=train_metric,
                     pbar=pbar,
                     device=device,
+                    scheduler=scheduler,
                 )
-            train_acc = train_metric.compute()["accuracy"]
+            # train_acc = train_metric.compute()["accuracy"]
+            # train_acc = 0.0
             logs.update(
                 {
                     "train_loss": train_loss,
-                    "train_accuracy": train_acc,
+                    # "train_accuracy": train_acc,
                     "train_time": timer["train"][-1],
                 }
             )
@@ -574,7 +670,7 @@ def main():
             log_msg = (
                 f"Epoch: {epoch} | "
                 f"train loss: {train_loss :.3f} "
-                f"acc: {train_acc:.3f} | "
+                # f"acc: {train_acc:.3f} | "
                 f"train_eval loss: {train_eval_loss :.3f} "
                 f"acc : {train_eval_acc:.3f} | "
                 f"val loss: {val_loss :.3f} "

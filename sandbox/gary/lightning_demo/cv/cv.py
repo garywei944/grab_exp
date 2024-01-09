@@ -10,7 +10,7 @@ from lightning.pytorch.loggers import CSVLogger
 from lightning.pytorch.cli import LightningCLI
 
 from torchmetrics.functional import accuracy
-
+from functools import partial
 
 from cd2root import cd2root
 
@@ -86,7 +86,9 @@ class LitClassifier(L.LightningModule):
         super().__init__()
 
         self.save_hyperparameters()
-        self.model = torchvision.models.resnet18(num_classes=10)
+        self.model = torchvision.models.resnet18(
+            num_classes=10, norm_layer=nn.InstanceNorm3d
+        )
         self.loss_fn = nn.CrossEntropyLoss()
 
     def forward(self, x):

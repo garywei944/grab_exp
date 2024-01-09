@@ -9,8 +9,13 @@ import torch.onnx
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+<<<<<<< HEAD
 from torch.func import vmap, grad
 # import pdb; pdb.set_trace()
+=======
+# import functorch as ft
+from torch.func import vmap, grad
+>>>>>>> 1b6784a60961c45b297fb23ae6adb92a2b669125
 
 
 # 2. Load in the text data
@@ -38,7 +43,7 @@ class Corpus(object):
 
     def tokenize(self, path):
         """Tokenizes a text file."""
-       
+
         # word to index mapping - replacing new lines with eos tokens
         with open(path, 'r', encoding="utf8") as f:
             for line in f:
@@ -46,7 +51,7 @@ class Corpus(object):
                 for word in words:
                     self.dictionary.add_word(word)
 
-    
+
         #word to number mapping
         with open(path, 'r') as f:
             all_id = []
@@ -55,7 +60,7 @@ class Corpus(object):
                 ids = []
                 for t in words:
                     ids.append(self.dictionary.add_word(t))
-                    #store in single pytorch tensor 
+                    #store in single pytorch tensor
                 all_id.append(torch.tensor(ids).type(torch.int64))
             ids = torch.cat(all_id)
 
@@ -120,7 +125,7 @@ args, unknown = parser.parse_known_args()
 # torch.manual_seed(args.seed)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-#creating batches for the data 
+#creating batches for the data
 def batch(data, batch_sz):
     no_batch = data.size(0) // batch_sz
     data = data.narrow(0, 0, no_batch * batch_sz)
@@ -138,7 +143,7 @@ def repackage_hidden(h):
         return h.detach()
     else:
         return tuple(repackage_hidden(v) for v in h)
-    
+
 def per_sample_grads(model, data, targets):
     data = data.long()  # assuming data is used for embeddings
     targets = targets.float()
@@ -148,14 +153,24 @@ def per_sample_grads(model, data, targets):
         loss = criterion(output.view(-1, model.ntoken), target)
         return loss
 
+<<<<<<< HEAD
     # Use vmap to compute gradients per sample
     vmap_grad = torch.func.vmap(torch.func.grad(compute_loss), in_dims=(0, 0))
+=======
+    # Assuming the batch dimension is the first dimension in data and targets
+    import pdb; pdb.set_trace()
+    
+    vmap_grad = vmap(grad(compute_loss), in_dims=(0, 0))
+>>>>>>> 1b6784a60961c45b297fb23ae6adb92a2b669125
     batch_grads = vmap_grad(data, targets)
 
     return batch_grads
 
 
+<<<<<<< HEAD
 
+=======
+>>>>>>> 1b6784a60961c45b297fb23ae6adb92a2b669125
 # eval_batch_size = 10
 corpus = Corpus(args.data)
 train_data = batch(corpus.train, args.batch_size)
@@ -176,8 +191,8 @@ def train():
     print(total_loss)
 
     hidden = model.init_hidden(args.batch_size)
-    
-   
+
+
     for batch, i in enumerate(range(0, train_data.size(0) - 1, args.bptt)):
         data, targets = get_batch(train_data, i)
         targets = targets.float()
@@ -189,18 +204,18 @@ def train():
         for p, grads in zip(model.parameters(), batch_grads):
             for g in grads:
                 p.data.add_(g, alpha=-args.lr)
-        
+
         model.zero_grad()
 
-        
+
         hidden = repackage_hidden(hidden)
-        
+
         output, hidden = model(data, hidden)
-        
+
         loss = criterion(output, targets)
         loss.backward()
-        
-        # gradient clipping 
+
+        # gradient clipping
         torch.nn.utils.clip_grad_norm_(model.parameters(), 0.20)
         for p in model.parameters():
             p.data.add_(p.grad, alpha=-args.lr)
@@ -209,7 +224,7 @@ def train():
 
         if batch % args.log_interval == 0 and batch > 0:
             cur_loss = total_loss / args.log_interval
-            
+
             print('| epoch {} |  '
                     'loss {} | ppl {}'.format(
                 epoch,  cur_loss, math.exp(cur_loss)))
@@ -221,25 +236,25 @@ def evaluate(data):
     # Turn on evaluation mode which disables dropout.
     model.eval()
     loss = 0.
-    
+
     hidden = model.init_hidden(args.batch_size)
-    
+
     with torch.no_grad():
         for i in range(0, data.size(0) - 1, args.bptt):
-            
+
             x, targets = get_batch(data, i)
-            
+
             output, hidden = model(x, hidden)
-            
+
             hidden = repackage_hidden(hidden)
             actual_loss =criterion(output, targets).item()
-            
-            loss += actual_loss * len(x) 
-            
-            
+
+            loss += actual_loss * len(x)
+
+
     return loss / (len(data) - 1)
 
-#train and evaluation 
+#train and evaluation
 perplexity_valid = []
 perplexity_test = []
 
@@ -249,17 +264,17 @@ for epoch in range(1, args.epochs+1):
   val_loss = evaluate(val_data)
   perp_valid = math.exp(val_loss)
 
-        
+
   print('| end of epoch {} | valid loss {} | '
                 'valid ppl {}'.format(epoch,
                                            val_loss, math.exp(val_loss)))
   test_loss = evaluate(test_data)
   perp_test = math.exp(test_loss)
-        
+
   print('| end of epoch {} | test loss {} | '
                 'test ppl {}'.format(epoch,
                                            test_loss, math.exp(test_loss)))
-  
+
   perplexity_valid.append(perp_valid)
   perplexity_test.append(perp_test)
 

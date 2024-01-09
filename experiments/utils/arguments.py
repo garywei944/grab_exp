@@ -108,6 +108,14 @@ class TrainArgs:
             "help": "Learning rate",
         },
     )
+    scheduler: str = field(
+        default="constant",
+        metadata={
+            "aliases": ["-sch"],
+            "help": "Learning rate scheduler",
+            "choices": ["constant", "multi_step_lr"],
+        },
+    )
     momentum: float = field(
         default=0,
         metadata={

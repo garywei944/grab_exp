@@ -106,7 +106,7 @@ dependencies:
       - datargs
       - dict-hash
       # https://github.com/Lightning-AI/pytorch-lightning/blob/master/requirements/pytorch/extra.txt
-      - lightning[pytorch-extra]
+      - lightning[pytorch-extra]~=2.1.3
       - lightning-gpt
       - deepspeed
       - sourcery

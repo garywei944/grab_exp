@@ -14,7 +14,6 @@ class CIFAR10DataModule(CVDataModule):
         data_dir: str = "data/external",
         train_batch_size: int = 256,
         eval_batch_size: int = 256,
-        num_workers: int = 1,
         shuffle: bool = True,
         sampler: Sampler = None,
         data_augmentation: str = "basic",
@@ -24,13 +23,10 @@ class CIFAR10DataModule(CVDataModule):
         self.data_dir = data_dir
         self.train_batch_size = train_batch_size
         self.eval_batch_size = eval_batch_size
-        self.num_workers = num_workers
         self.shuffle = shuffle
         self.sampler = sampler
 
         self.save_hyperparameters()
-
-        # TODO: Add data augmentation
 
         self.transform = transforms.Compose(
             [
@@ -45,8 +41,8 @@ class CIFAR10DataModule(CVDataModule):
         if data_augmentation == "basic":
             self.train_transform = transforms.Compose(
                 [
-                    transforms.RandomHorizontalFlip(),
                     transforms.RandomCrop(32, padding=4),
+                    transforms.RandomHorizontalFlip(),
                     self.transform,
                 ]
             )
@@ -75,22 +71,17 @@ class CIFAR10DataModule(CVDataModule):
             self.train_dataset,
             batch_size=self.train_batch_size,
             shuffle=self.shuffle,
-            num_workers=self.num_workers,
-            # pin_memory=True,
+            sampler=self.sampler,
         )
 
     def val_dataloader(self):
         return DataLoader(
             self.test_dataset,
             batch_size=self.eval_batch_size,
-            num_workers=self.num_workers,
-            # pin_memory=True,
         )
 
     def test_dataloader(self):
         return DataLoader(
             self.test_dataset,
             batch_size=self.eval_batch_size,
-            num_workers=self.num_workers,
-            # pin_memory=True,
         )

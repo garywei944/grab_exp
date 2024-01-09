@@ -33,13 +33,13 @@ y = df['target_column']
 
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
-# Apply preprocessing
+
 X_train = preprocessor.fit_transform(X_train)
 X_test = preprocessor.transform(X_test)
 y_train = torch.tensor(y_train, dtype=torch.float32)
 y_test = torch.tensor(y_test, dtype=torch.float32)
 
-# Logistic Regression model
+
 class LogisticRegressionModel(nn.Module):
     def __init__(self, n_features):
         super(LogisticRegressionModel, self).__init__()
@@ -48,21 +48,21 @@ class LogisticRegressionModel(nn.Module):
     def forward(self, x):
         return torch.sigmoid(self.linear(x))
 
-# Initialize the model
+
 model = LogisticRegressionModel(X_train.shape[1])
 
-# Loss and optimizer
+
 criterion = nn.BCELoss()
 optimizer = optim.SGD(model.parameters(), lr=0.01)
 
-# Training loop
+
 epochs = 100
 for epoch in range(epochs):
-    # Forward pass
+    
     outputs = model(X_train)
     loss = criterion(outputs.squeeze(), y_train)
 
-    # Backward and optimize
+    
     optimizer.zero_grad()
     loss.backward()
     optimizer.step()
@@ -70,7 +70,6 @@ for epoch in range(epochs):
     if (epoch+1) % 10 == 0:
         print(f'Epoch [{epoch+1}/{epochs}], Loss: {loss.item():.4f}')
 
-# Testing the model
 with torch.no_grad():
     y_predicted = model(X_test)
     y_predicted_cls = y_predicted.round()

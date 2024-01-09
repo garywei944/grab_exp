@@ -44,8 +44,33 @@ from experiments.utils.arguments import GraBArgs, TrainArgs
 from grabsampler import BalanceType
 from grabsampler.utils import EventTimer, pretty_time, StaleMeanEstimator
 
+from experiments.nlp.clm.clm import (
+    validate,
+    get_lr_scheduler,
+    get_func,
+    get_exp_id,
+    ModelArguments,
+    DataTrainingArguments,
+)
+
 MODEL_CONFIG_CLASSES = list(MODEL_FOR_CAUSAL_LM_MAPPING.keys())
 MODEL_TYPES = tuple(conf.model_type for conf in MODEL_CONFIG_CLASSES)
+
+
+@dataclass
+class Args:
+    rho: float = field(
+        default=0.05,
+        metadata={
+            "help": "rho for sharpness-aware minimization",
+        },
+    )
+    adaptive: bool = field(
+        default=False,
+        metadata={
+            "help": "adaptive for sharpness-aware minimization",
+        },
+    )
 
 
 class DESampler(Sampler):
@@ -143,208 +168,6 @@ class DESampler(Sampler):
         yield from self.orders
 
 
-@dataclass
-class ModelArguments:
-    """
-    Arguments pertaining to which model/config/tokenizer we are going to fine-tune, or train from scratch.
-    """
-
-    model_name_or_path: str | None = field(
-        default=None,
-        metadata={
-            "help": (
-                "The model checkpoint for weights initialization.Don't set if you want to train a model from scratch."
-            )
-        },
-    )
-    model_type: str | None = field(
-        default=None,
-        metadata={
-            "help": "If training from scratch, pass a model type from the list: "
-            + ", ".join(MODEL_TYPES)
-        },
-    )
-    config_overrides: str | None = field(
-        default=None,
-        metadata={
-            "help": (
-                "Override some existing default config settings when a model is trained from scratch. Example: "
-                "n_embd=10,resid_pdrop=0.2,scale_attn_weights=false,summary_type=cls_index"
-            )
-        },
-    )
-    config_name: str | None = field(
-        default=None,
-        metadata={
-            "help": "Pretrained config name or path if not the same as model_name"
-        },
-    )
-    tokenizer_name: str | None = field(
-        default=None,
-        metadata={
-            "help": "Pretrained tokenizer name or path if not the same as model_name"
-        },
-    )
-    cache_dir: str | None = field(
-        default=None,
-        metadata={
-            "help": "Where do you want to store the pretrained models downloaded from huggingface.co"
-        },
-    )
-    use_fast_tokenizer: bool = field(
-        default=True,
-        metadata={
-            "help": "Whether to use one of the fast tokenizer (backed by the tokenizers library) or not."
-        },
-    )
-    model_revision: str = field(
-        default="main",
-        metadata={
-            "help": "The specific model version to use (can be a branch name, tag name or commit id)."
-        },
-    )
-    torch_dtype: str | None = field(
-        default=None,
-        metadata={
-            "help": (
-                "Override the default `torch.dtype` and load the model under this dtype. If `auto` is passed, the "
-                "dtype will be automatically derived from the model's weights."
-            ),
-            "choices": ["auto", "bfloat16", "float16", "float32"],
-        },
-    )
-    low_cpu_mem_usage: bool = field(
-        default=False,
-        metadata={
-            "help": (
-                "It is an option to create the model as an empty shell, then only materialize its parameters when the pretrained weights are loaded."
-                "set True will benefit LLM loading time and RAM consumption."
-            )
-        },
-    )
-
-    def __post_init__(self):
-        # if self.config_overrides is not None and (
-        #     self.config_name is not None or self.model_name_or_path is not None
-        # ):
-        #     raise ValueError(
-        #         "--config_overrides can't be used in combination with --config_name or --model_name_or_path"
-        #     )
-        ...
-
-
-@dataclass
-class DataTrainingArguments:
-    """
-    Arguments pertaining to what data we are going to input our model for training and eval.
-    """
-
-    dataset_name: str | None = field(
-        default=None,
-        metadata={"help": "The name of the dataset to use (via the datasets library)."},
-    )
-    dataset_config_name: str | None = field(
-        default=None,
-        metadata={
-            "help": "The configuration name of the dataset to use (via the datasets library)."
-        },
-    )
-    train_file: str | None = field(
-        default=None, metadata={"help": "The input training data file (a text file)."}
-    )
-    validation_file: str | None = field(
-        default=None,
-        metadata={
-            "help": "An optional input evaluation data file to evaluate the perplexity on (a text file)."
-        },
-    )
-    max_train_samples: int | None = field(
-        default=None,
-        metadata={
-            "help": (
-                "For debugging purposes or quicker training, truncate the number of training examples to this "
-                "value if set."
-            )
-        },
-    )
-    max_eval_samples: int | None = field(
-        default=None,
-        metadata={
-            "help": (
-                "For debugging purposes or quicker training, truncate the number of evaluation examples to this "
-                "value if set."
-            )
-        },
-    )
-    streaming: bool = field(default=False, metadata={"help": "Enable streaming mode"})
-    block_size: int | None = field(
-        default=None,
-        metadata={
-            "help": (
-                "Optional input sequence length after tokenization. "
-                "The training dataset will be truncated in block of this size for training. "
-                "Default to the model max input length for single sentence inputs (take into account special tokens)."
-            )
-        },
-    )
-    overwrite_cache: bool = field(
-        default=False,
-        metadata={"help": "Overwrite the cached training and evaluation sets"},
-    )
-    validation_split_percentage: int | None = field(
-        default=5,
-        metadata={
-            "help": "The percentage of the train set used as validation set in case there's no validation split"
-        },
-    )
-    preprocessing_num_workers: int | None = field(
-        default=None,
-        metadata={"help": "The number of processes to use for the preprocessing."},
-    )
-    keep_linebreaks: bool = field(
-        default=True,
-        metadata={"help": "Whether to keep line breaks when using TXT files or not."},
-    )
-    wandb: bool = field(
-        default=False,
-        metadata={
-            "help": "Use wandb for logging",
-        },
-    )
-    wandb_project: str = field(
-        default=None,
-        metadata={
-            "aliases": ["-wp"],
-            "help": "Wandb project name",
-        },
-    )
-
-    def __post_init__(self):
-        if (
-            self.dataset_name is None
-            and self.train_file is None
-            and self.validation_file is None
-        ):
-            raise ValueError(
-                "Need either a dataset name or a training/validation file."
-            )
-        else:
-            if self.train_file is not None:
-                extension = self.train_file.split(".")[-1]
-                assert extension in [
-                    "csv",
-                    "json",
-                    "txt",
-                ], "`train_file` should be a csv, a json or a txt file."
-            if self.validation_file is not None:
-                extension = self.validation_file.split(".")[-1]
-                assert extension in [
-                    "csv",
-                    "json",
-                    "txt",
-                ], "`validation_file` should be a csv, a json or a txt file."
-
-
 @torch.no_grad()
 def train(
     train_loader,
@@ -361,6 +184,8 @@ def train(
     checkpointing_steps,
     max_steps,
     device="cuda",
+    adaptive=False,
+    rho=0.05,
 ):
     sampler.reset()
     # TODO: no resume or accumulate gradient
@@ -377,8 +202,6 @@ def train(
         grads = {k: g.mean(dim=0) for k, g in ft_per_sample_grads.items()}
 
         # Sharpness-aware minimization
-        adaptive = False
-        rho = 0.05
         norm = torch.stack(
             [
                 # https://github.com/davda54/sam/issues/16
@@ -444,48 +267,20 @@ def train(
     return torch.cat(losses).mean(), completed_steps
 
 
-@torch.no_grad()
-def validate(eval_loader, model, device="cuda", disable_tqdm=False):
-    losses = []
-    for step, batch in tqdm(
-        enumerate(eval_loader),
-        total=len(eval_loader),
-        desc="eval",
-        leave=True,
-        disable=disable_tqdm,
-    ):
-        # for step, batch in enumerate(eval_loader):
-        # batch = {k: v.to(device) for k, v in batch.items()}
-        for k, v in batch.items():
-            b = v.size(0)
-            break
-        outputs = model(**batch)
-        loss = outputs.loss_fn
-        losses.append(loss.repeat(b))
-    losses = torch.cat(losses)
-
-    eval_loss = losses.mean()
-    try:
-        perplexity = torch.exp(eval_loss)
-    except OverflowError:
-        perplexity = float("inf")
-
-    return eval_loss, perplexity
-
-
 def main():
     # Parse the arguments
     parser = HfArgumentParser(
-        (ModelArguments, DataTrainingArguments, TrainingArguments, GraBArgs)
+        (ModelArguments, DataTrainingArguments, TrainingArguments, GraBArgs, Args)
     )
     model_args: ModelArguments
     data_args: DataTrainingArguments
     training_args: TrainingArguments
     grab_args: GraBArgs
+    args: Args
     if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
         # If we pass only one argument to the script, and it's the path to a json file,
         # let's parse it to get our arguments.
-        model_args, data_args, training_args, grab_args = parser.parse_json_file(
+        model_args, data_args, training_args, grab_args, args = parser.parse_json_file(
             json_file=os.path.abspath(sys.argv[1])
         )
     else:
@@ -494,6 +289,7 @@ def main():
             data_args,
             training_args,
             grab_args,
+            args,
         ) = parser.parse_args_into_dataclasses()
 
     assert (
@@ -875,7 +671,7 @@ def main():
                 training_args.learning_rate,
                 warmup_steps,
                 max_steps,
-                training_args.learning_rate / 10,
+                # training_args.learning_rate / 10,
             ),
             betas=(training_args.adam_beta1, training_args.adam_beta2),
             weight_decay=training_args.weight_decay,
@@ -953,6 +749,8 @@ def main():
                     checkpointing_steps=save_steps,
                     max_steps=max_steps,
                     device=device,
+                    adaptive=args.adaptive,
+                    rho=args.rho,
                 )
 
             # For Adaptive Mean Balance that need m and v from optimizer
@@ -1127,65 +925,6 @@ def compute_loss(model, params, buffers, kwargs):
     )
 
     return out.loss_fn
-
-
-def get_lr_scheduler(learning_rate, num_warmup_steps, num_training_steps, min_lr):
-    def func(it: int):
-        # 1) linear warmup for warmup_iters steps
-        if it < num_warmup_steps:
-            return learning_rate * it / num_warmup_steps
-        # 2) if it > lr_decay_iters, return min learning rate
-        if it > num_training_steps:
-            return min_lr
-        # 3) in between, use cosine decay down to min learning rate
-        decay_ratio = (it - num_warmup_steps) / (num_training_steps - num_warmup_steps)
-        # assert 0 <= decay_ratio <= 1
-        coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))  # coeff ranges 0..1
-        return min_lr + coeff * (learning_rate - min_lr)
-
-    return func
-
-
-def get_func(model, batch: dict):
-    return vmap(
-        grad_and_value(partial(compute_loss, model)),
-        in_dims=(None, None, {k: 0 for k in batch.keys()}),
-        randomness="different",
-    )  # the only argument of compute_loss is batched along the first axis
-
-
-def get_exp_id(
-    model_args: ModelArguments,
-    data_args: DataTrainingArguments,
-    training_args: TrainingArguments,
-    grab_args: GraBArgs,
-    model_name: str,
-):
-    # Unique experiment name for checkpoints
-    exp_id = (
-        f"{data_args.dataset_name}_{model_name}_{grab_args.balance_type}"
-        f"_{training_args.optim.value}_lr_{training_args.learning_rate}"
-        f"_wd_{training_args.weight_decay}"
-        f"_b_{training_args.train_batch_size}_seed_{training_args.seed}"
-    )
-
-    if grab_args.normalize_grad:
-        exp_id += "_norm"
-    if grab_args.random_projection:
-        exp_id += f"_pi_{grab_args.random_projection_eps}"
-    if grab_args.prob_balance:
-        exp_id += f"_prob_{grab_args.prob_balance_c:.1f}"
-    if grab_args.balance_type in [
-        BalanceType.RECURSIVE_BALANCE,
-        BalanceType.RECURSIVE_PAIR_BALANCE,
-    ]:
-        exp_id += f"_depth_{grab_args.depth}"
-    if not grab_args.random_first_epoch:
-        exp_id += "_no_rr"
-    if grab_args.balance_type == BalanceType.EMA_BALANCE:
-        exp_id += f"_ema_{grab_args.ema_decay}"
-
-    return exp_id
 
 
 if __name__ == "__main__":

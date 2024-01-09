@@ -69,9 +69,10 @@ def main():
 
     best_results = {}
     for ckpt in path.glob("*.ckpt"):
-        print(ckpt)
+        # print(ckpt)
 
         step = int(ckpt.stem.split("=")[-1])
+        # print(step)
         model = GLUET5Model.load_from_checkpoint(ckpt)
         trainer.validate(model, datamodule=dm)
 
