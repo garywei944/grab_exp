@@ -2,43 +2,46 @@ import pandas as pd
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.compose import ColumnTransformer
-from sklearn.pipeline import Pipeline
+from sklearn.impute import SimpleImputer
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
 
-# Seed for reproducibility
 seed = 42
 torch.manual_seed(seed)
 np.random.seed(seed)
 
 df = pd.read_csv('/home/dyc33/grab_exp/grab_exp/data/hmda_2017_ny_first-lien-owner-occupied-1-4-family-records_labels.csv')
 
-non_numeric_columns = [34, 36, 38, 44]  
+mixed_type_cols = ['applicant_ethnicity_name', 'applicant_race_name_1', 'co_applicant_ethnicity_name', 'co_applicant_race_name_1']
 
-# Preprocessing pipeline
-numeric_features = df.select_dtypes(include=['int64', 'float64']).columns
-categorical_features = non_numeric_columns
+df[mixed_type_cols] = df[mixed_type_cols].astype(str)
+df.fillna('Missing', inplace=True) 
+
+target = 'action_taken'
+
+X = df.drop(target, axis=1)
+y = df[target]
+
+categorical_cols = X.select_dtypes(include=['object', 'category']).columns
+numerical_cols = X.select_dtypes(include=['int64', 'float64']).columns
 
 preprocessor = ColumnTransformer(
     transformers=[
-        ('num', StandardScaler(), numeric_features),
-        ('cat', OneHotEncoder(), categorical_features)
+        ('num', StandardScaler(), numerical_cols),
+        ('cat', OneHotEncoder(handle_unknown='ignore'), categorical_cols)
     ])
-
-# Splitting the dataset
-X = df.drop('target_column', axis=1)  
-y = df['target_column']
 
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
+X_train = preprocessor.fit_transform(X_train).toarray()
+X_test = preprocessor.transform(X_test).toarray()
 
-X_train = preprocessor.fit_transform(X_train)
-X_test = preprocessor.transform(X_test)
-y_train = torch.tensor(y_train, dtype=torch.float32)
-y_test = torch.tensor(y_test, dtype=torch.float32)
-
+X_train = torch.tensor(X_train, dtype=torch.float32)
+X_test = torch.tensor(X_test, dtype=torch.float32)
+y_train = torch.tensor(y_train.values, dtype=torch.float32)
+y_test = torch.tensor(y_test.values, dtype=torch.float32)
 
 class LogisticRegressionModel(nn.Module):
     def __init__(self, n_features):
@@ -48,22 +51,16 @@ class LogisticRegressionModel(nn.Module):
     def forward(self, x):
         return torch.sigmoid(self.linear(x))
 
-
 model = LogisticRegressionModel(X_train.shape[1])
-
 
 criterion = nn.BCELoss()
 optimizer = optim.SGD(model.parameters(), lr=0.01)
 
-
 epochs = 100
 for epoch in range(epochs):
-    
+    optimizer.zero_grad()
     outputs = model(X_train)
     loss = criterion(outputs.squeeze(), y_train)
-
-    
-    optimizer.zero_grad()
     loss.backward()
     optimizer.step()
 
