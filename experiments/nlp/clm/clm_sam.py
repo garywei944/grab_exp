@@ -131,7 +131,7 @@ class DESampler(Sampler):
 
         for i, sign in enumerate(signs):
             if sign:
-                self.next_orders[self.left] = self.orders[self.idx]
+                self.next_orders[self.left] = self.osrders[self.idx]
                 self.idx += 1
                 self.next_orders[self.right] = self.orders[self.idx]
                 self.acc += pair_grad[i]
@@ -264,7 +264,7 @@ def train(
         if completed_steps >= max_steps:
             break
 
-    return torch.cat(losses).mean(), completed_steps
+    return torch.cat(losses).mean(), completed_steps, params, opt_state
 
 
 def main():
@@ -734,7 +734,7 @@ def main():
 
             with timer(f"train"):
                 # perform training (single loop over the train dataloader)
-                train_loss, completed_steps = train(
+                train_loss, completed_steps, params, opt_state = train(
                     train_loader=train_loader,
                     sampler=sampler,
                     model=model,
