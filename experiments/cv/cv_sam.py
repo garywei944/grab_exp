@@ -65,6 +65,8 @@ class DESampler(Sampler):
         self.left = self.n
         self.right = self.n - 1
 
+        # logging.warning("Doing reversed GraB! Just for experiment, change this!")
+
     # # pair balance not working well
     # def step(
     #     self,
@@ -211,7 +213,7 @@ class Args:
         },
     )
     adaptive: bool = field(
-        default=True,
+        default=False,
         metadata={
             "help": "Use adaptive SAM",
         },
@@ -502,6 +504,7 @@ def main():
 
         if epoch != 0:
             with timer("train"):
+                model.train()
                 train_loss, params, opt_state = train(
                     train_loader=train_loader,
                     sampler=sampler,
@@ -548,6 +551,7 @@ def main():
                     }
                 )
         with timer("val"):
+            model.eval()
             train_eval_loss = validate(
                 test_loader=train_eval_loader,
                 model=model,
