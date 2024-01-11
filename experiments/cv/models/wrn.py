@@ -30,7 +30,7 @@ class BasicBlock(nn.Module):
         elif norm == "gn":
             self.bn1 = nn.GroupNorm(gn_groups, in_channels)
         elif norm == "in":
-            self.bn1 = nn.InstanceNorm2d(in_channels)
+            self.bn1 = nn.InstanceNorm2d(in_channels, affine=True)
         else:
             raise ValueError("invalid norm type")
         self.conv1 = nn.Conv2d(
@@ -47,7 +47,7 @@ class BasicBlock(nn.Module):
         elif norm == "gn":
             self.bn2 = nn.GroupNorm(gn_groups, out_channels)
         elif norm == "in":
-            self.bn2 = nn.InstanceNorm2d(out_channels)
+            self.bn2 = nn.InstanceNorm2d(out_channels, affine=True)
         else:
             raise ValueError("invalid norm type")
         self.conv2 = nn.Conv2d(
@@ -161,7 +161,7 @@ class WRN(nn.Module):
         elif norm == "gn":
             self.bn = nn.GroupNorm(gn_groups, n_channels[3])
         elif norm == "in":
-            self.bn = nn.InstanceNorm2d(n_channels[3])
+            self.bn = nn.InstanceNorm2d(n_channels[3], affine=True)
         else:
             raise ValueError("invalid norm type")
 

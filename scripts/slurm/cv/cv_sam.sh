@@ -36,12 +36,12 @@
 DATASET=cifar10
 mkdir -p logs/$DATASET
 
-for seed in 0; do
+for seed in 1 2; do
   for lr in 0.1; do
-    for wd in 0; do
+    for wd in 5e-4; do
       for balance in mean; do
-        for rho in 0.2 0.3; do
-          for da in basic; do
+        for rho in 0.1 0.2 0.3; do
+          for da in basic; do  # data augmentation
             sbatch -J $DATASET scripts/slurm/cv/cv_sam.job \
               -d $DATASET \
               -model resnet \

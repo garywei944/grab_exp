@@ -580,6 +580,7 @@ def main():
 
         if epoch != 0:
             with timer("train"):
+                model.train()
                 train_loss, params, opt_state = train(
                     train_loader=train_loader,
                     sampler=sampler,
@@ -626,6 +627,7 @@ def main():
                     }
                 )
         with timer("val"):
+            model.eval()
             train_eval_loss = validate(
                 test_loader=train_eval_loader,
                 model=model,
