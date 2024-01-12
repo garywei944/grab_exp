@@ -3,6 +3,9 @@ import torch.nn as nn
 import torch.optim as optim
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
+import functorch
+import argparse
+import torch.nn.functional as F
 
 # Set device
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -36,35 +39,60 @@ class LogisticRegression(nn.Module):
 model = LogisticRegression(features.shape[1])
 model.to(device)
 
-learning_rate = 1e-2
-batch_size = 16
-epochs = 50
-optimizer = optim.SGD(model.parameters(), lr=learning_rate)
-loss_fn = nn.BCEWithLogitsLoss()  
+# Parse command line arguments
+parser = argparse.ArgumentParser(description='Logistic Regression with functorch')
+parser.add_argument('--learning_rate', type=float, default=1e-2, help='Learning rate')
+parser.add_argument('--batch_size', type=int, default=16, help='Batch size')
+parser.add_argument('--epochs', type=int, default=50, help='Number of epochs')
+parser.add_argument('--accumulation_steps', type=int, default=1, help='Gradient accumulation steps')
 
+args = parser.parse_args()
+
+# Use the arguments
+learning_rate = args.learning_rate
+batch_size = args.batch_size
+epochs = args.epochs
+accumulation_steps = args.accumulation_steps
+
+# DataLoader
 train_data = torch.utils.data.TensorDataset(X_train, y_train)
 train_loader = torch.utils.data.DataLoader(dataset=train_data, batch_size=batch_size, shuffle=True)
 
+# Convert model to functional form
+fmodel, params, buffers = functorch.make_functional_with_buffers(model)
+
+# Define the loss function for the functional model
+def compute_loss_stateless_model(params, buffers, X, y):
+    yhat = fmodel(params, buffers, X).squeeze()
+    return F.binary_cross_entropy_with_logits(yhat, y.squeeze())
+
+# Define a function to compute per-example gradients
+func_per_example_grad = torch.vmap(functorch.grad(compute_loss_stateless_model), in_dims=(None, None, 0, 0))
+
 # Training Loop
-for epoch in range(epochs):
-    model.train()
+for e in range(1, args.epochs + 1):
     for X_batch, y_batch in train_loader:
         X_batch, y_batch = X_batch.to(device), y_batch.to(device)
 
-        logits = model(X_batch).squeeze()
-        loss = loss_fn(logits, y_batch)
+        # Compute per-example gradients
+        per_example_grads = func_per_example_grad(params, buffers, X_batch, y_batch)
 
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+        # Average the gradients over the batch
+        avg_grads = [torch.mean(g, dim=0) for g in per_example_grads]
 
-    print(f'Epoch [{epoch+1}/{epochs}], Loss: {loss.item():.4f}')
+        # Update parameters using averaged gradients
+        with torch.no_grad():
+            for p, g in zip(params, avg_grads):
+                p -= learning_rate * g
 
+    print(f'Epoch {e}/{epochs} complete')
+
+# Evaluation
 model.eval()
 with torch.no_grad():
     X_test = X_test.to(device)
     y_test = y_test.to(device)
-    logits = model(X_test).squeeze()
+    logits = fmodel(params, buffers, X_test).squeeze()
     y_pred = torch.sigmoid(logits)  
     y_pred = (y_pred >= 0.5).float()
     accuracy = (y_pred == y_test).float().mean()
