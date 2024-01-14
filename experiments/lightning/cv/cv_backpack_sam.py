@@ -368,7 +368,7 @@ def main():
     timestamp = datetime.now().isoformat()
     args = parse_args()
 
-    model_name = f"{args.model.model_name}-da_{args.data.data_augmentation}-{args.model.norm}-backpack-{args.balance}"
+    model_name = f"sam-{args.model.model_name}-da_{args.data.data_augmentation}-{args.model.norm}-backpack-{args.balance}"
     # task_name = args.model.task_name
 
     L.seed_everything(args.seed)
