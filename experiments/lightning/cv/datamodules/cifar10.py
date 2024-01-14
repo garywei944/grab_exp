@@ -15,7 +15,6 @@ class CIFAR10DataModule(CVDataModule):
         train_batch_size: int = 256,
         eval_batch_size: int = 256,
         shuffle: bool = True,
-        sampler: Sampler = None,
         data_augmentation: str = "basic",
     ):
         super().__init__()
@@ -24,9 +23,10 @@ class CIFAR10DataModule(CVDataModule):
         self.train_batch_size = train_batch_size
         self.eval_batch_size = eval_batch_size
         self.shuffle = shuffle
-        self.sampler = sampler
 
-        self.save_hyperparameters()
+        self.sampler = None
+
+        self.save_hyperparameters(ignore="sampler")
 
         self.transform = transforms.Compose(
             [
@@ -70,7 +70,7 @@ class CIFAR10DataModule(CVDataModule):
         return DataLoader(
             self.train_dataset,
             batch_size=self.train_batch_size,
-            shuffle=self.shuffle,
+            shuffle=self.shuffle if self.sampler is None else None,
             sampler=self.sampler,
         )
 

@@ -115,5 +115,6 @@ dependencies:
       - separableconv-torch
       - kmeans1d # for k-means quantization
       - cd2root
+      - backpack-for-pytorch
       # Trial
       - omegaconf-argparse # to use omegaconf with argparse

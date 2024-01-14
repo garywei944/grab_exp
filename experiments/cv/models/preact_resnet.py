@@ -150,7 +150,7 @@ class PreActBlock(nn.Module):
         if self.droprate > 0:
             out = F.dropout(out, p=self.droprate, training=self.training)
         out = self.conv2(out)
-        out += shortcut
+        out = out + shortcut
         return out
 
 

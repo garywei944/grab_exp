@@ -1,4 +1,7 @@
+from cvxpy import logistic
 import torch
+from torch import nn, Tensor
+import numpy as np
 
 import lightning as L
 from lightning.pytorch.cli import LightningArgumentParser
@@ -8,8 +11,18 @@ from lightning.pytorch.callbacks import (
     Timer,
     LearningRateMonitor,
 )
+from torchmetrics import Accuracy
+
+from lightning.pytorch.demos.boring_classes import BoringDataModule
+
+from transformers import get_cosine_schedule_with_warmup
 
 from datetime import datetime
+
+from backpack import backpack, extend
+from backpack.extensions import BatchGrad
+
+from grabsampler import GraBSampler
 
 from datamodules import CVDataModule, CIFAR10DataModule
 from cv import Model
@@ -18,14 +31,16 @@ from cd2root import cd2root
 
 cd2root()
 
-from experiments.sam import SAM, enable_running_stats, disable_running_stats
+from lightning.pytorch.trainer.trainer import log
+
+log.setLevel("DEBUG")
 
 
-class SAMModel(Model):
+class BackpackModel(Model):
     def __init__(
         self,
         dm: CVDataModule = None,
-        model_name: str = "wrn",
+        model_name: str = "resnet",
         optimizer: str = "sgd",
         learning_rate: float = 0.1,
         weight_decay: float = 5e-4,
@@ -52,31 +67,33 @@ class SAMModel(Model):
 
         self.save_hyperparameters(ignore="dm")
 
+        self.dm = dm
+
+        self.model = extend(self.model)
+        self.loss_fn = extend(self.loss_fn)
+
         self.automatic_optimization = False
 
     def training_step(self, batch, batch_idx):
         opt = self.optimizers()
         x, y = batch
 
-        def closure():
-            # Second back-prop
-            disable_running_stats(self)
-            loss = self.loss_fn(self(x), y)
-            self.manual_backward(loss)
-            if self.gradient_clip_val:
-                self.clip_gradients(
-                    opt,
-                    gradient_clip_val=self.gradient_clip_val,
-                    gradient_clip_algorithm="norm",
-                )
-            return loss
+        b = x.shape[0]
 
         # First back-prop
-        enable_running_stats(self)
         loss = self.loss_fn(self(x), y)
-        self.manual_backward(loss)
 
-        opt.step(closure=closure)
+        with backpack(BatchGrad()):
+            self.manual_backward(loss)
+
+        if self.gradient_clip_val:
+            self.clip_gradients(
+                opt,
+                gradient_clip_val=self.gradient_clip_val,
+                gradient_clip_algorithm="norm",
+            )
+
+        opt.step()
         opt.zero_grad()
 
         # sch = self.lr_schedulers()
@@ -84,84 +101,22 @@ class SAMModel(Model):
 
         self.log("train_loss", loss, on_epoch=True, prog_bar=True, sync_dist=True)
 
+        per_sample_grad = torch.cat(
+            [
+                p.grad_batch.reshape(b, -1)
+                for p in self.parameters()
+                if p.grad_batch is not None
+            ],
+            dim=1,
+        )
+
+        self.dm.sampler.step({"": per_sample_grad})
+
         return loss
 
     def on_train_epoch_end(self):
         sch = self.lr_schedulers()
         sch.step()
-
-    def configure_optimizers(self):
-        # no_decay = ["bias", "LayerNorm.weight"]
-        # optimizer_grouped_parameters = [
-        #     {
-        #         "params": [
-        #             p
-        #             for n, p in self.named_parameters()
-        #             if all(nd not in n for nd in no_decay)
-        #         ],
-        #         "weight_decay": self.weight_decay,
-        #     },
-        #     {
-        #         "params": [
-        #             p
-        #             for n, p in self.named_parameters()
-        #             if any(nd in n for nd in no_decay)
-        #         ],
-        #         "weight_decay": 0.0,
-        #     },
-        # ]
-        optimizer_grouped_parameters = self.parameters()
-        if self.optimizer == "sgd":
-            optimizer = SAM(
-                optimizer_grouped_parameters,
-                torch.optim.SGD,
-                rho=self.rho,
-                lr=self.learning_rate,
-                weight_decay=self.weight_decay,
-                momentum=self.momentum,
-                nesterov=True,
-            )
-        elif self.optimizer == "adam":
-            optimizer = SAM(
-                optimizer_grouped_parameters,
-                torch.optim.AdamW,
-                rho=self.rho,
-                lr=self.learning_rate,
-                weight_decay=self.weight_decay,
-                betas=(self.adam_beta1, self.adam_beta2),
-            )
-        else:
-            raise ValueError
-
-        # Use cosine scheduler
-        # scheduler = get_cosine_schedule_with_warmup(
-        #     optimizer,
-        #     num_warmup_steps=0,
-        #     num_training_steps=self.trainer.max_steps,
-        # )
-        if self.model_name == "wrn":
-            scheduler = torch.optim.lr_scheduler.MultiStepLR(
-                optimizer,
-                milestones=[60, 120, 160],
-                gamma=0.2,
-            )
-        elif self.model_name == "resnet":
-            scheduler = torch.optim.lr_scheduler.MultiStepLR(
-                optimizer,
-                milestones=[100, 150],
-                gamma=0.1,
-            )
-        else:
-            raise NotImplementedError
-
-        return {
-            "optimizer": optimizer,
-            "lr_scheduler": {
-                "scheduler": scheduler,
-                "interval": "epoch",
-                "frequency": 1,
-            },
-        }
 
 
 def parse_args():
@@ -185,8 +140,9 @@ def parse_args():
         type=str,
         default="sam-cifar10",
     )
+    parser.add_argument("-bt", "--balance", choices=["rr", "mean"], default="mean")
 
-    parser.add_lightning_class_args(SAMModel, "model")
+    parser.add_lightning_class_args(BackpackModel, "model")
     parser.add_lightning_class_args(CIFAR10DataModule, "data")
     # parser.link_arguments("model.model_name_or_path", "data.model_name_or_path")
     # parser.link_arguments("model.task_name", "data.task_name")
@@ -203,13 +159,20 @@ def main():
     timestamp = datetime.now().isoformat()
     args = parse_args()
 
-    model_name = f"sam-{args.model.model_name}-da_{args.data.data_augmentation}-{args.model.norm}"
+    model_name = f"{args.model.model_name}-da_{args.data.data_augmentation}-{args.model.norm}-backpack-{args.balance}"
     # task_name = args.model.task_name
 
     L.seed_everything(args.seed)
 
     dm = CIFAR10DataModule(**vars(args.data))
-    model = SAMModel(dm=dm, **vars(args.model))
+    dm.prepare_data()
+    dm.setup()
+    model = BackpackModel(dm=dm, **vars(args.model))
+
+    sampler = GraBSampler(
+        dm.train_dataloader(), dict(model.named_parameters()), args.balance
+    )
+    dm.sampler = sampler
 
     trainer = L.Trainer(
         # max_steps=args.max_steps,
@@ -218,14 +181,14 @@ def main():
         # val_check_interval=args.val_interval,
         # gradient_clip_val=5.0,
         logger=[
-            TensorBoardLogger("lightning_logs", name=model_name),
+            # TensorBoardLogger("lightning_logs", name=model_name),
             WandbLogger(
                 project=args.wandb_project,
                 name=model_name,
                 entity="grab",
                 mode="online",
             ),
-            CSVLogger("logs", name=model_name),
+            # CSVLogger("logs", name=model_name),
         ],
         callbacks=[
             # EarlyStopping(monitor="val_loss"),
