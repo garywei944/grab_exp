@@ -115,6 +115,9 @@ with torch.no_grad():
 
         print(f"Epoch {e}/{epochs} complete")
 
+        # TODO: evaluate training loss on the whole training dataset
+        # TODO: compute the loss and accuracy on the training dataset
+
         # Evaluation
         model.eval()
         with torch.no_grad():
