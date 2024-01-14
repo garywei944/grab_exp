@@ -23,7 +23,9 @@ for seed in 0; do
         --data.train_batch_size 128 \
         --data.data_augmentation $da \
         --model.model_name resnet \
-        --model.norm $norm
+        --model.norm $norm \
+        -ckpt 'sam-cifar10/uo3wy3tt/checkpoints/epoch=73-step=28934.ckpt' \
+        -bt 'pair'
       # --model.rho $rho
       # done
     done

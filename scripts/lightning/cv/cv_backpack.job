@@ -3,9 +3,9 @@
 #SBATCH -o logs/sam/%j.out               # output file (%j expands to jobID)
 #SBATCH -e logs/sam/%j.err               # error log file (%j expands to jobID)
 #SBATCH -N 1                                 # Total number of nodes requested
-#SBATCH --mem=64G                            # server memory requested (per node)
+#SBATCH --mem=32G                            # server memory requested (per node)
 #SBATCH --get-user-env                       # retrieve the users login environment
-#SBATCH -t 02-00:00:00                           # Time limit (hh:mm:ss)
+#SBATCH -t 00-08:00:00                           # Time limit (hh:mm:ss)
 #SBATCH --partition=gpu,desa                     # Request partition
 
 CMD="$*"

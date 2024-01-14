@@ -138,7 +138,15 @@ def parse_args():
         type=str,
         default="sam-cifar10",
     )
-    parser.add_argument("-bt", "--balance", choices=["rr", "mean"], default="mean")
+    parser.add_argument(
+        "-bt", "--balance", choices=["rr", "mean", "pair"], default="mean"
+    )
+    parser.add_argument(
+        "-ckpt",
+        "--checkpoint",
+        type=str,
+        default=None,
+    )
 
     parser.add_lightning_class_args(BackpackModel, "model")
     parser.add_lightning_class_args(CIFAR10DataModule, "data")
@@ -213,6 +221,7 @@ def main():
         model,
         datamodule=dm,
         # ckpt_path="checkpoints/google/t5-v1_1-small/glue/2023-12-28T18:12:26.650635/epoch=7-step=54000.ckpt",
+        ckpt_path=args.checkpoint,
     )
 
 
