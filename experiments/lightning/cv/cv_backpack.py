@@ -47,7 +47,6 @@ class BackpackModel(Model):
         momentum: float = 0.9,
         adam_beta1: float = 0.9,
         adam_beta2: float = 0.999,
-        rho: float = 0.05,
         norm: str = "bn",
         gradient_clip_val: float = None,
     ):
@@ -62,7 +61,6 @@ class BackpackModel(Model):
             adam_beta2=adam_beta2,
             norm=norm,
         )
-        self.rho = rho
         self.gradient_clip_val = gradient_clip_val
 
         self.save_hyperparameters(ignore="dm")
@@ -170,7 +168,7 @@ def main():
     model = BackpackModel(dm=dm, **vars(args.model))
 
     sampler = GraBSampler(
-        dm.train_dataloader(), dict(model.named_parameters()), args.balance
+        dm.train_dataset, dict(model.named_parameters()), args.balance
     )
     dm.sampler = sampler
 

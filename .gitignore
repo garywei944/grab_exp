@@ -1,6 +1,7 @@
 .idea
 wandb
 lightning_logs
+sam-cifar10
 
 # ignore files under data/
 # files should not be uploaded to GitHub, etc
