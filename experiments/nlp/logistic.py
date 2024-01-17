@@ -15,8 +15,8 @@ from grabsampler import GraBSampler
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Load Data
-features_tuple = torch.load("data/features-processed-NY-2017.pt")
-targets_tuple = torch.load("data/targets-processed-NY-2017.pt")
+features_tuple = torch.load("/home/dyc33/grab_exp/grab_exp/data/features-processed-NY-2017.pt")
+targets_tuple = torch.load("/home/dyc33/grab_exp/grab_exp/data/targets-processed-NY-2017.pt")
 
 features = features_tuple[0].to("cpu")
 targets = targets_tuple[0].to("cpu")
@@ -103,6 +103,7 @@ with torch.no_grad():
             # Compute per-example gradients
             per_example_grads = func_per_example_grad(params, buffers, X_batch, y_batch)
 
+            # Update GraBSampler with the computed gradients
             sampler.step(per_example_grads)
 
             # Average the gradients over the batch
@@ -113,7 +114,7 @@ with torch.no_grad():
                 for p, g in zip(params.values(), avg_grads):
                     p -= learning_rate * g
 
-        print(f"Epoch {e}/{epochs} complete")
+        print(f'Epoch {e}/{args.epochs} complete')
 
         # TODO: evaluate training loss on the whole training dataset
         # TODO: compute the loss and accuracy on the training dataset
@@ -121,14 +122,12 @@ with torch.no_grad():
         # Evaluation
         model.eval()
         with torch.no_grad():
-            X_test = X_test.to(device)
-            y_test = y_test.to(device)
-            # logits = fmodel(params, buffers, X_test).squeeze()
-            logits = model(X_test).squeeze()
-            # y_pred = torch.sigmoid(logits)
-            # y_pred = (y_pred >= 0.5).float()
-            y_pred = torch.sign(logits)
-            accuracy = (y_pred == y_test).float().mean()
+            X_test_device = X_test.to(device)  
+            y_test_device = y_test.to(device)
+            logits = model(X_test_device).squeeze()
+            y_pred = torch.sigmoid(logits)
+            y_pred = (y_pred >= 0.5).float()
+            accuracy = (y_pred == y_test_device).float().mean()
             print(f"Accuracy: {accuracy:.4f}")
 
-        del X_test, y_test
+        del X_test_device, y_test_device
