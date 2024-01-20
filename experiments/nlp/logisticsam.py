@@ -96,8 +96,42 @@ func_per_example_grad = vmap(
     grad(compute_loss_stateless_model), in_dims=(None, None, 0, 0)
 )
 
+for p in model.parameters():
+    p.requires_grad = True
+
+
+def sam_update(model, X_batch, y_batch, rho, eta):
+    # Forward pass and compute loss
+    logits = model(X_batch).squeeze()
+    loss = F.binary_cross_entropy_with_logits(logits, y_batch.squeeze())
+
+    # Compute gradients
+    grads = torch.autograd.grad(loss, model.parameters(), create_graph=True)
+
+    # Compute the adversarial weights
+    with torch.no_grad():
+        for p, g in zip(model.parameters(), grads):
+            p.add_(rho * g / (g.norm() + 1e-12), alpha=1.0)
+
+    # Compute loss at adversarial weights
+    adversarial_logits = model(X_batch).squeeze()
+    adversarial_loss = F.binary_cross_entropy_with_logits(adversarial_logits, y_batch.squeeze())
+    adversarial_grads = torch.autograd.grad(adversarial_loss, model.parameters())
+
+    # Update the original weights
+    with torch.no_grad():
+        for p, g in zip(model.parameters(), adversarial_grads):
+            p.add_(g, alpha=-eta)
+
+    # Reset the weights to their original state
+    with torch.no_grad():
+        for p, g in zip(model.parameters(), grads):
+            p.add_(g, alpha=-rho / (g.norm() + 1e-12))
+
+
 # Training Loop
 with torch.no_grad():
+    rho = 0.05  # SAM neighborhood size
     for e in range(1, args.epochs + 1):
         model.train()
         total_loss = 0
@@ -110,8 +144,8 @@ with torch.no_grad():
             # Compute per-example gradients
             per_example_grads = func_per_example_grad(params, buffers, X_batch, y_batch)
 
-            # Update GraBSampler with the computed gradients
-            sampler.step(per_example_grads)
+            # SAM update
+            sam_update(model, X_batch, y_batch, rho, learning_rate)
 
             # Average the gradients over the batch
             avg_grads = [torch.mean(g, dim=0) for g in per_example_grads.values()]
