@@ -10,7 +10,9 @@ import argparse
 import torch.nn.functional as F
 
 from grabsampler import GraBSampler
+import wandb
 
+wandb.init(project="grab", entity="dyc33")
 # Set device
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -46,6 +48,7 @@ class LogisticRegression(nn.Module):
 
 model = LogisticRegression(features.shape[1])
 model.to(device)
+wandb.watch(model)
 
 # Parse command line arguments
 parser = argparse.ArgumentParser(description="Logistic Regression with functorch")
@@ -97,6 +100,10 @@ func_per_example_grad = vmap(
 with torch.no_grad():
     for e in range(1, args.epochs + 1):
         model.train()
+        total_loss = 0
+        total_accuracy = 0
+        total_samples = 0
+
         for X_batch, y_batch in train_loader:
             X_batch, y_batch = X_batch.to(device), y_batch.to(device)
 
@@ -114,10 +121,21 @@ with torch.no_grad():
                 for p, g in zip(params.values(), avg_grads):
                     p -= learning_rate * g
 
-        print(f'Epoch {e}/{args.epochs} complete')
+            # Compute loss and accuracy for the batch
+            logits = functional_call(model, (params, buffers), (X_batch,)).squeeze()
+            loss = F.binary_cross_entropy_with_logits(logits, y_batch.squeeze())
+            total_loss += loss.item() * X_batch.size(0)
+            predictions = torch.sigmoid(logits) >= 0.5
+            total_accuracy += (predictions == y_batch).sum().item()
+            total_samples += X_batch.size(0)
 
-        # TODO: evaluate training loss on the whole training dataset
-        # TODO: compute the loss and accuracy on the training dataset
+        # Calculate average loss and accuracy
+        avg_loss = total_loss / total_samples
+        avg_accuracy = total_accuracy / total_samples
+
+        # Log to wandb
+        wandb.log({"epoch": e, "loss": avg_loss, "accuracy": avg_accuracy})
+        print(f'Epoch {e}/{args.epochs} complete, Loss: {avg_loss}, Accuracy: {avg_accuracy}')
 
         # Evaluation
         model.eval()
@@ -125,9 +143,11 @@ with torch.no_grad():
             X_test_device = X_test.to(device)  
             y_test_device = y_test.to(device)
             logits = model(X_test_device).squeeze()
-            y_pred = torch.sigmoid(logits)
-            y_pred = (y_pred >= 0.5).float()
+            y_pred = torch.sigmoid(logits) >= 0.5
             accuracy = (y_pred == y_test_device).float().mean()
-            print(f"Accuracy: {accuracy:.4f}")
+            print(f"Validation Accuracy: {accuracy:.4f}")
+            wandb.log({"epoch": e, "validation_accuracy": accuracy})
 
         del X_test_device, y_test_device
+
+wandb.finish()
