@@ -121,7 +121,7 @@ jupyter-client==8.6.0
 jupyter-console==6.6.3
 jupyter-core==5.7.1
 jupyter-events==0.9.0
-jupyter-lsp==2.2.1
+jupyter-lsp==2.2.2
 jupyter-server-terminals==0.5.1
 jupyter-server==2.12.5
 jupyter==1.0.0
