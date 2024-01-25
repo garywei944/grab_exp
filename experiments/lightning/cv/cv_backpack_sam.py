@@ -44,8 +44,13 @@ class SAMSampler(Sampler):
     next_orders: Tensor
     acc: Tensor
 
-    def __init__(self, n: int, d: int, *args, **kwargs):
+    def __init__(self, n: int, d: int, balance: str, *args, **kwargs):
         super().__init__()
+
+        assert balance in ["rr", "mean", "pair"]
+
+        self.balance = balance
+
         self.n = n
         self.d = d
 
@@ -59,7 +64,10 @@ class SAMSampler(Sampler):
         self.left = self.n
         self.right = self.n - 1
 
-    def compute_sings(self, grads: dict[str, Tensor]):
+    def compute_sings(self, grads: dict[str, Tensor]) -> list[bool] | None:
+        if self.balance == "rr":
+            return None
+
         b = next(iter(grads.values())).shape[0]
 
         assert b % 2 == 0
@@ -84,8 +92,11 @@ class SAMSampler(Sampler):
     def step(
         self,
         grads: dict[str, Tensor],
-        signs: list[bool],
-    ):
+        signs: list[bool] | None,
+    ) -> None:
+        if signs is None:
+            return
+
         b = next(iter(grads.values())).shape[0]
 
         assert b % 2 == 0
@@ -112,20 +123,23 @@ class SAMSampler(Sampler):
             self.right -= 1
 
     def reset(self):
-        assert self.left > self.right
-        assert self.idx == self.n
+        if self.balance == "rr":
+            self.orders = torch.randperm(self.n, dtype=torch.int64)
+        else:
+            assert self.left > self.right
+            assert self.idx == self.n
 
-        self.idx = 0
-        self.orders.copy_(self.next_orders)
-        self.next_orders.zero_()
+            self.idx = 0
+            self.orders.copy_(self.next_orders)
+            self.next_orders.zero_()
 
-        self.left = 0
-        self.right = self.n - 1
+            self.left = 0
+            self.right = self.n - 1
 
-        self.acc.zero_()
+            self.acc.zero_()
 
-        # print(self.orders[:128])
-        # print(self.orders[-128:])
+        print(self.orders[:32])
+        print(self.orders[-32:])
 
     def __len__(self):
         return self.n
@@ -178,6 +192,24 @@ class BackpackModel(Model):
 
         b = x.shape[0]
 
+        # First back-prop
+        enable_running_stats(self)
+        loss = self.loss_fn(self(x), y)
+
+        with backpack(BatchGrad()):
+            self.manual_backward(loss)
+
+        per_sample_grad = torch.cat(
+            [
+                p.grad_batch.reshape(b, -1)
+                for p in self.parameters()
+                if p.grad_batch is not None
+            ],
+            dim=1,
+        )
+
+        signs = self.dm.sampler.compute_sings({"": per_sample_grad})
+
         def closure():
             # Second back-prop
             disable_running_stats(self)
@@ -197,28 +229,10 @@ class BackpackModel(Model):
 
             self.dm.sampler.step(
                 {"": per_sample_grad},
-                self.signs,
+                signs,
             )
 
             return loss
-
-        # First back-prop
-        enable_running_stats(self)
-        loss = self.loss_fn(self(x), y)
-
-        with backpack(BatchGrad()):
-            self.manual_backward(loss)
-
-        per_sample_grad = torch.cat(
-            [
-                p.grad_batch.reshape(b, -1)
-                for p in self.parameters()
-                if p.grad_batch is not None
-            ],
-            dim=1,
-        )
-
-        self.signs = self.dm.sampler.compute_sings({"": per_sample_grad})
 
         del per_sample_grad
 
@@ -381,7 +395,7 @@ def main():
     n = len(dm.train_dataset)
     d = sum(p.numel() for p in model.parameters() if p.requires_grad)
 
-    sampler = SAMSampler(n, d)
+    sampler = SAMSampler(n, d, args.balance)
     dm.sampler = sampler
 
     trainer = L.Trainer(
